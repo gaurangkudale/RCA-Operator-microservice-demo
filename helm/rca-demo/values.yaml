@@ -53,15 +53,23 @@ kube-prometheus-stack:
 
 jaeger:
   enabled: true
-  collector:
+  allInOne:
+    enabled: true
     service:
-      otlp:
-        grpc:
-          name: otlp-grpc
-          port: 4317
-        http:
-          name: otlp-http
-          port: 4318
+      collector:
+        otlp:
+          grpc:
+            name: otlp-grpc
+            port: 4317
+          http:
+            name: otlp-http
+            port: 4318
+  collector:
+    enabled: false
+  query:
+    enabled: false
+  agent:
+    enabled: false
   provisionDataStore:
     cassandra: false
   storage:
