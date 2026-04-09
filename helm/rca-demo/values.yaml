@@ -42,7 +42,9 @@ postgresql:
     registry: docker.io
     repository: library/postgres
     tag: "15-alpine"
+    pullPolicy: IfNotPresent
   auth:
+    username: "postgres"
     postgresPassword: "password"
     database: "rca_demo"
 
