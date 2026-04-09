@@ -1,4 +1,4 @@
-name: CI Build
+name: CI Build and Publish
 
 on:
   push:
@@ -10,41 +10,82 @@ on:
       - main
       - master
 
+env:
+  REGISTRY: ghcr.io
+
 jobs:
-  build-docker:
-    name: Build Docker Images
+  build-and-push-docker:
+    name: Build and Push Docker Images
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Downcase REPO name
+        run: |
+          echo "REPO=${GITHUB_REPOSITORY,,}" >>${GITHUB_ENV}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build App Image
+      - name: Log in to the Container registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for App
+        id: meta-app
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.REPO }}-app
+
+      - name: Extract metadata (tags, labels) for Load Tester
+        id: meta-load-tester
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.REPO }}-load-tester
+
+      - name: Build and push App Image
         uses: docker/build-push-action@v5
         with:
           context: ./src
-          push: false
-          tags: rca-demo-app:latest
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-app.outputs.tags }}
+          labels: ${{ steps.meta-app.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Build Load Tester Image
+      - name: Build and push Load Tester Image
         uses: docker/build-push-action@v5
         with:
           context: ./load-tester
-          push: false
-          tags: rca-demo-load-tester:latest
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-load-tester.outputs.tags }}
+          labels: ${{ steps.meta-load-tester.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  build-helm:
-    name: Lint and Package Helm Chart
+  build-and-push-helm:
+    name: Package and Push Helm Chart
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Downcase REPO_OWNER name
+        run: |
+          echo "REPO_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >>${GITHUB_ENV}
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
@@ -74,3 +115,13 @@ jobs:
           name: helm-chart
           path: rca-demo-apps-*.tgz
           retention-days: 7
+
+      - name: Login to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} --username ${{ github.actor }} --password-stdin
+
+      - name: Push Helm Chart to GHCR
+        if: github.event_name != 'pull_request'
+        run: |
+          CHART_PKG=$(ls rca-demo-apps-*.tgz)
+          helm push $CHART_PKG oci://${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/charts
