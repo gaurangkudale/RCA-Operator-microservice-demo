@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: load-tester
+  labels:
+    app: load-tester
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: load-tester
+  template:
+    metadata:
+      labels:
+        app: load-tester
+    spec:
+      containers:
+        - name: load-tester
+          image: "{{ .Values.loadTesterImage.repository }}:{{ .Values.loadTesterImage.tag }}"
+          imagePullPolicy: {{ .Values.loadTesterImage.pullPolicy }}
+          env:
+            - name: TARGET_URL
+              value: "http://proxy-service:8080"

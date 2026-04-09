@@ -1,0 +1,50 @@
+{{- range .Values.services }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .name }}
+  labels:
+    app: {{ .name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .name }}
+    spec:
+      containers:
+        - name: {{ .name }}
+          image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: SERVICE_NAME
+              value: {{ .name }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ .name }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ $.Values.telemetry.otlpEndpoint }}
+            - name: DATABASE_URL
+              value: "postgres://postgres:password@{{ $.Release.Name }}-postgresql:5432/rca_demo"
+            {{- range .env }}
+            - name: {{ .name }}
+              value: {{ .value }}
+            {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .name }}
+spec:
+  selector:
+    app: {{ .name }}
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+---
+{{- end }}

@@ -1,0 +1,56 @@
+image:
+  repository: rca-demo-app
+  tag: latest
+  pullPolicy: IfNotPresent
+
+loadTesterImage:
+  repository: rca-demo-load-tester
+  tag: latest
+  pullPolicy: IfNotPresent
+
+services:
+  - name: proxy-service
+    env:
+      - name: NEXT_SERVICE_URL
+        value: "http://auth-service:8080"
+  - name: auth-service
+    env:
+      - name: NEXT_SERVICE_URL
+        value: "http://user-service:8080"
+  - name: user-service
+    env:
+      - name: NEXT_SERVICE_URL
+        value: "http://order-service:8080"
+  - name: order-service
+    env:
+      - name: NEXT_SERVICE_URL
+        value: "http://payment-service:8080"
+  - name: payment-service
+    env:
+      - name: NEXT_SERVICE_URL
+        value: "http://inventory-service:8080"
+  - name: inventory-service
+    env: [] # End of chain
+
+telemetry:
+  otlpEndpoint: "http://jaeger-collector:4317"
+
+# Dependencies
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: "password"
+    database: "rca_demo"
+
+kube-prometheus-stack:
+  enabled: true
+
+jaeger:
+  enabled: true
+  provisionDataStore:
+    cassandra: false
+  storage:
+    type: memory
+
+signoz:
+  enabled: false # Disabled by default as it's heavy, enable if needed
