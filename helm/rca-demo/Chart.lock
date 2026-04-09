@@ -1,12 +1,12 @@
 dependencies:
-- name: kube-prometheus-stack
+- name: prometheus
   repository: https://prometheus-community.github.io/helm-charts
-  version: 45.27.2
+  version: 29.2.0
 - name: jaeger
   repository: https://jaegertracing.github.io/helm-charts
   version: 0.71.12
 - name: signoz
   repository: https://charts.signoz.io
   version: 0.28.3
-digest: sha256:5fef6d088866fce8a8d6475e1d93d3084d67ed9673af811e2a3a63894414d87c
-generated: "2026-04-09T23:17:16.335582+05:30"
+digest: sha256:cc7e12d227eee7b1258fd6aa310fc1ea320fb44771ca809cafffadbb5cf50a7a
+generated: "2026-04-09T23:47:54.407219+05:30"

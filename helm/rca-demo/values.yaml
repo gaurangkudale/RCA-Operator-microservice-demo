@@ -48,7 +48,7 @@ postgresql:
     postgresPassword: "password"
     database: "rca_demo"
 
-kube-prometheus-stack:
+prometheus:
   enabled: true
 
 jaeger:
