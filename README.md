@@ -94,13 +94,23 @@ kubectl get pods -n rca-demo
 
 The load tester pod should start hitting the `proxy-service` automatically, which in turn calls the other services, generating rich telemetry data.
 
-### 5. Access Jaeger
-Port-forward Jaeger to view the distributed traces:
+### 5. Access the Observability UIs
 
+To visualize the traces, metrics, and logs being generated, you can port-forward the respective services to your local machine.
+
+**Access Jaeger UI (Default)**
+Jaeger is enabled by default to visualize distributed traces. Port-forward the `jaeger-query` service:
 ```bash
-kubectl port-forward svc/rca-demo-jaeger-query 16686:16686 -n rca-demo
+kubectl port-forward svc/rca-demo-jaeger-query 16686:80 -n rca-demo
 ```
-Open [http://localhost:16686](http://localhost:16686) in your browser. You will see traces containing errors, cascading failures, and standard health checks.
+- Open your browser to: [http://localhost:16686](http://localhost:16686)
+
+**Access Signoz UI (If Enabled)**
+If you installed the chart with `--set signoz.enabled=true`, Signoz provides a unified UI for traces, metrics, and logs. Port-forward the Signoz frontend service:
+```bash
+kubectl port-forward svc/rca-demo-signoz-frontend 3301:3301 -n rca-demo
+```
+- Open your browser to: [http://localhost:3301](http://localhost:3301)
 
 ### 6. Observe Telemetry for RCA-Operator
 Because OpenTelemetry and python-json-logger are properly configured, all standard output logs from the pods will be emitted in structured JSON format with `TraceID`, `SpanID`, `Severity`, and `Exception` fields, matching the ingestion patterns required by the RCA-Operator's Correlation Engine.
