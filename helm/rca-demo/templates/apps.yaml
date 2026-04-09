@@ -19,6 +19,8 @@ spec:
         - name: {{ .name }}
           image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          command: ["opentelemetry-instrument"]
+          args: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
           ports:
             - containerPort: 8080
           env:
@@ -26,6 +28,10 @@ spec:
               value: {{ .name }}
             - name: OTEL_SERVICE_NAME
               value: {{ .name }}
+            - name: OTEL_TRACES_EXPORTER
+              value: "otlp"
+            - name: OTEL_EXPORTER_OTLP_PROTOCOL
+              value: "grpc"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ $.Values.telemetry.otlpEndpoint }}
             - name: DATABASE_URL

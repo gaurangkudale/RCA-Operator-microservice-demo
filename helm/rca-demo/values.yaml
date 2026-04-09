@@ -33,7 +33,7 @@ services:
     env: [] # End of chain
 
 telemetry:
-  otlpEndpoint: "http://jaeger-collector:4317"
+  otlpEndpoint: "http://rca-demo-jaeger-collector:4317"
 
 # Dependencies
 postgresql:
@@ -53,6 +53,15 @@ kube-prometheus-stack:
 
 jaeger:
   enabled: true
+  collector:
+    service:
+      otlp:
+        grpc:
+          name: otlp-grpc
+          port: 4317
+        http:
+          name: otlp-http
+          port: 4318
   provisionDataStore:
     cassandra: false
   storage:
