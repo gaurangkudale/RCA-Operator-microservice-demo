@@ -8,12 +8,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 TARGET_URL = os.getenv("TARGET_URL", "http://proxy-service:8080")
 
 endpoints = [
-    ("/health", 0.4),       # 40% chance
-    ("/process", 0.4),      # 40% chance
+    ("/health", 0.2),       # 20% chance
+    ("/process", 0.2),      # 20% chance
     ("/warn", 0.08),        # 8% chance
-    ("/error", 0.05),       # 5% chance
-    ("/simulate-oom", 0.02),# 2% chance
-    ("/simulate-cpu", 0.05),# 5% chance
+    ("/error", 0.5),        # 50% chance (increased for error testing)
+    ("/simulate-oom", 0.01),# 1% chance
+    ("/simulate-cpu", 0.01),# 1% chance
 ]
 
 def get_random_endpoint():
