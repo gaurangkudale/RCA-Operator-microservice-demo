@@ -1,12 +1,12 @@
 image:
   repository: ghcr.io/gaurangkudale/rca-operator-microservice-demo-app
   tag: main
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
 
 loadTesterImage:
   repository: ghcr.io/gaurangkudale/rca-operator-microservice-demo-load-tester
   tag: main
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
 
 services:
   - name: proxy-service
