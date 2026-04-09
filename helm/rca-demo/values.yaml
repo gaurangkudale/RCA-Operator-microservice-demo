@@ -38,6 +38,10 @@ telemetry:
 # Dependencies
 postgresql:
   enabled: true
+  image:
+    registry: docker.io
+    repository: library/postgres
+    tag: "15-alpine"
   auth:
     postgresPassword: "password"
     database: "rca_demo"
