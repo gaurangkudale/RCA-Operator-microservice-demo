@@ -34,8 +34,10 @@ Each service exposes the following endpoints (with fault injection built-in):
 2.  Kubernetes Cluster (e.g., `minikube` or `kind`)
 3.  Helm
 
-### 1. Build Docker Images
-Since the applications are locally built, you must build their Docker images and make them accessible to your cluster.
+### 1. (Optional) Build Docker Images Locally
+The Helm chart is configured by default to pull the pre-built images from the GitHub Container Registry (`ghcr.io/gaurangkudale/rca-operator-microservice-demo-...`).
+
+If you prefer to build and test them locally, you can do so.
 
 **For Minikube:**
 ```bash
@@ -43,45 +45,45 @@ eval $(minikube docker-env)
 
 # Build the main microservice image
 cd src
-docker build -t rca-demo-app:latest .
+docker build -t ghcr.io/gaurangkudale/rca-operator-microservice-demo-app:main .
 cd ..
 
 # Build the load tester image
 cd load-tester
-docker build -t rca-demo-load-tester:latest .
+docker build -t ghcr.io/gaurangkudale/rca-operator-microservice-demo-load-tester:main .
 cd ..
 ```
 
 **For Kind:**
 ```bash
 cd src
-docker build -t rca-demo-app:latest .
+docker build -t ghcr.io/gaurangkudale/rca-operator-microservice-demo-app:main .
 cd ..
 cd load-tester
-docker build -t rca-demo-load-tester:latest .
+docker build -t ghcr.io/gaurangkudale/rca-operator-microservice-demo-load-tester:main .
 cd ..
 
-kind load docker-image rca-demo-app:latest
-kind load docker-image rca-demo-load-tester:latest
+kind load docker-image ghcr.io/gaurangkudale/rca-operator-microservice-demo-app:main
+kind load docker-image ghcr.io/gaurangkudale/rca-operator-microservice-demo-load-tester:main
 ```
 
-### 2. Update Helm Dependencies
-Pull the required dependencies (PostgreSQL, Prometheus, Jaeger, Signoz) into your chart:
+### 2. Deploy from GitHub Container Registry (GHCR)
+You can directly deploy the packaged Helm chart from the GitHub Container Registry without needing to clone the repository or build the images manually.
 
-```bash
-cd helm/rca-demo
-helm dependency update
-cd ../..
-```
+1. **Login to Helm Registry (if the repository is private):**
+   ```bash
+   echo "YOUR_GITHUB_PAT" | helm registry login ghcr.io --username YOUR_GITHUB_USERNAME --password-stdin
+   ```
 
-### 3. Deploy
-Install the umbrella helm chart into your cluster.
+2. **Install the Chart:**
+   ```bash
+   helm upgrade --install rca-demo oci://ghcr.io/gaurangkudale/charts/rca-demo-apps \
+     --version 0.1.0 \
+     --namespace rca-demo \
+     --create-namespace
+   ```
 
-```bash
-helm upgrade --install rca-demo ./helm/rca-demo --namespace rca-demo --create-namespace
-```
-
-*(Note: Signoz is disabled by default to save resources. If you want to enable it, pass `--set signoz.enabled=true`)*
+*(Note: Signoz is disabled by default to save resources. If you want to enable it, append `--set signoz.enabled=true` to the helm command)*
 
 ### 4. Verify the Deployment
 Check that all pods are running successfully:

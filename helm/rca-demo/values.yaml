@@ -1,11 +1,11 @@
 image:
-  repository: rca-demo-app
-  tag: latest
+  repository: ghcr.io/gaurangkudale/rca-operator-microservice-demo-app
+  tag: main
   pullPolicy: IfNotPresent
 
 loadTesterImage:
-  repository: rca-demo-load-tester
-  tag: latest
+  repository: ghcr.io/gaurangkudale/rca-operator-microservice-demo-load-tester
+  tag: main
   pullPolicy: IfNotPresent
 
 services:
