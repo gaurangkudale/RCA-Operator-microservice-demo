@@ -1,7 +1,7 @@
 dependencies:
 - name: postgresql
   repository: https://charts.bitnami.com/bitnami
-  version: 12.1.0
+  version: 15.0.0
 - name: kube-prometheus-stack
   repository: https://prometheus-community.github.io/helm-charts
   version: 45.27.2
@@ -11,5 +11,5 @@ dependencies:
 - name: signoz
   repository: https://charts.signoz.io
   version: 0.28.3
-digest: sha256:a8c9d2f70e4bfa48ba35f8c8b9d7dd39750daa98849ab0a988d94b0af5e9bba7
-generated: "2026-04-09T22:22:56.193326+05:30"
+digest: sha256:c1705db2e189380ca09a36952f80f8dfa0bb16785b0651d3efcdfe24be98d7f1
+generated: "2026-04-09T22:55:33.028363+05:30"
