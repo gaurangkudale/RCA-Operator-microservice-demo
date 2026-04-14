@@ -1,14 +1,12 @@
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException
 import os
 import requests
 import time
-from pydantic import BaseModel
-from typing import Optional
 from common.telemetry import setup_telemetry
 
 def create_app(service_name: str):
     app = FastAPI(title=service_name)
-    logger = setup_telemetry(app, service_name)
+    logger = setup_telemetry(service_name)
     
     # Optional downstream service to call
     next_service_url = os.getenv("NEXT_SERVICE_URL")
