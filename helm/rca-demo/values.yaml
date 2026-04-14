@@ -33,6 +33,7 @@ services:
     env: [] # End of chain
 
 telemetry:
+  enabled: false  # Set to true to enable OTEL auto-instrumentation
   otlpEndpoint: "http://rca-demo-jaeger-collector:4317"
 
 # Dependencies
@@ -49,10 +50,10 @@ postgresql:
     database: "rca_demo"
 
 prometheus:
-  enabled: true
+  enabled: false  # Controlled by telemetry.enabled flag
 
 jaeger:
-  enabled: true
+  enabled: false  # Controlled by telemetry.enabled flag
   allInOne:
     enabled: true
     service:
