@@ -1,8 +1,8 @@
-# Multi-Service API Patterns Guide
+# Production Microservice API Patterns Guide
 
 ## Overview
 
-This document explains the new multi-service API endpoints and how they follow a Directed Acyclic Graph (DAG) pattern to avoid circular API calls.
+This document explains the comprehensive API endpoints designed for production-grade microservices including CRUD operations, multi-service orchestration, resource management, and distributed tracing support.
 
 ## Architecture
 
@@ -29,9 +29,252 @@ proxy-service (level 0)
 
 **Key Rule:** A service at level N can only call services at level N+1 or higher (downstream only).
 
-## New API Endpoints
+---
 
-### 1. `/validate` - Multi-Service Validation
+## API Endpoints by Category
+
+### 1. Health & Readiness Endpoints
+
+#### `/health` - Health Check
+Returns service health status with timestamp.
+
+**Method:** GET  
+**Purpose:** Basic service health verification
+
+**Example Response:**
+```json
+{
+  "status": "ok",
+  "service": "user-service",
+  "timestamp": "2026-04-16T10:30:45.123456"
+}
+```
+
+#### `/ready` - Kubernetes Readiness Probe
+Checks if service is ready to accept traffic.
+
+**Method:** GET  
+**Purpose:** Kubernetes readiness probe (traffic routing decision)
+
+**Example Response:**
+```json
+{
+  "ready": true,
+  "service": "user-service",
+  "resources_count": 42
+}
+```
+
+---
+
+### 2. CRUD Operations (Production Resource Management)
+
+#### `/list` - Get All Resources
+Retrieve list of all resources managed by the service.
+
+**Method:** GET
+
+**Example Response:**
+```json
+{
+  "status": "success",
+  "service": "user-service",
+  "count": 3,
+  "resources": [
+    {
+      "id": "res_1713267045123",
+      "service": "user-service",
+      "created_at": "2026-04-16T10:10:45.123456",
+      "status": "active"
+    }
+  ],
+  "timestamp": "2026-04-16T10:30:45.123456"
+}
+```
+
+#### `/get/{resource_id}` - Get Specific Resource
+Retrieve a specific resource by ID.
+
+**Method:** GET  
+**Path Parameter:** `resource_id` - ID of the resource
+
+**Success Response:**
+```json
+{
+  "status": "success",
+  "service": "user-service",
+  "resource": {
+    "id": "res_1713267045123",
+    "service": "user-service",
+    "created_at": "2026-04-16T10:10:45.123456",
+    "status": "active"
+  }
+}
+```
+
+**Error Response (404):**
+```json
+{
+  "detail": "Resource res_unknown not found"
+}
+```
+
+#### `/create` - Create New Resource
+Create a new resource with auto-generated ID.
+
+**Method:** POST
+
+**Response:**
+```json
+{
+  "status": "success",
+  "service": "user-service",
+  "resource_id": "res_1713267045123",
+  "message": "Resource created successfully"
+}
+```
+
+#### `/update/{resource_id}` - Update Resource
+Update an existing resource by ID.
+
+**Method:** PUT  
+**Path Parameter:** `resource_id` - ID of the resource to update
+
+**Response:**
+```json
+{
+  "status": "success",
+  "service": "user-service",
+  "resource_id": "res_1713267045123",
+  "message": "Resource updated successfully"
+}
+```
+
+#### `/delete/{resource_id}` - Delete Resource
+Delete a resource by ID.
+
+**Method:** DELETE  
+**Path Parameter:** `resource_id` - ID of the resource to delete
+
+**Response:**
+```json
+{
+  "status": "success",
+  "service": "user-service",
+  "resource_id": "res_1713267045123",
+  "deleted_resource": {
+    "id": "res_1713267045123",
+    "service": "user-service",
+    "created_at": "2026-04-16T10:10:45.123456",
+    "status": "active"
+  },
+  "message": "Resource deleted successfully"
+}
+```
+
+#### `/search?query=<string>` - Search Resources
+Search resources by query string.
+
+**Method:** GET  
+**Query Parameter:** `query` (optional) - Search query string
+
+**Response:**
+```json
+{
+  "status": "success",
+  "service": "user-service",
+  "query": "res_171",
+  "result_count": 2,
+  "results": [
+    {
+      "id": "res_1713267045123",
+      "service": "user-service",
+      "created_at": "2026-04-16T10:10:45.123456",
+      "status": "active"
+    }
+  ]
+}
+```
+
+---
+
+### 3. Operation & State Management
+
+#### `/status/{operation_id}` - Get Operation Status
+Get status of a previously executed operation.
+
+**Method:** GET  
+**Path Parameter:** `operation_id` - ID of the operation
+
+**Response (Found):**
+```json
+{
+  "status": "success",
+  "service": "user-service",
+  "operation_id": "op-123",
+  "operation_status": {
+    "operation": "create",
+    "status": "completed"
+  }
+}
+```
+
+**Response (Not Found):**
+```json
+{
+  "status": "unknown",
+  "service": "user-service",
+  "operation_id": "op-unknown",
+  "message": "Operation not found"
+}
+```
+
+#### `/rollback/{operation_id}` - Rollback Operation
+Rollback a previous operation.
+
+**Method:** POST  
+**Path Parameter:** `operation_id` - ID of the operation to rollback
+
+**Response:**
+```json
+{
+  "status": "success",
+  "service": "user-service",
+  "operation_id": "op-123",
+  "original_status": {
+    "operation": "create",
+    "status": "completed"
+  },
+  "message": "Operation rolled back successfully"
+}
+```
+
+---
+
+### 4. Metrics & Monitoring
+
+#### `/metrics` - Service Metrics
+Get service metrics including resource counts and health status.
+
+**Method:** GET
+
+**Response:**
+```json
+{
+  "service": "user-service",
+  "timestamp": "2026-04-16T10:30:45.123456",
+  "metrics": {
+    "total_resources": 42,
+    "total_operations": 156,
+    "uptime_check": true,
+    "memory_healthy": true
+  }
+}
+```
+
+---
+
+### 5. New Multi-Service Endpoints
 
 Validates data/state across multiple downstream services.
 
@@ -206,25 +449,78 @@ CHECK_SERVICES_URL: http://inventory-service:8080
 
 ## Testing the APIs
 
-### Test /validate endpoint
+## Testing the APIs
+
+### Health Checks
+```bash
+curl http://localhost:8080/health
+curl http://localhost:8080/ready
+```
+
+### CRUD Operations
+```bash
+# Create resource
+curl -X POST http://localhost:8080/create
+
+# List all resources
+curl http://localhost:8080/list
+
+# Get specific resource
+curl http://localhost:8080/get/res_1713267045123
+
+# Search resources
+curl "http://localhost:8080/search?query=res_171"
+
+# Update resource
+curl -X PUT http://localhost:8080/update/res_1713267045123
+
+# Delete resource
+curl -X DELETE http://localhost:8080/delete/res_1713267045123
+```
+
+### Operations & State
+```bash
+curl http://localhost:8080/status/op-123
+curl -X POST http://localhost:8080/rollback/op-123
+```
+
+### Multi-Service Orchestration
 ```bash
 curl http://localhost:8080/validate
-```
-
-### Test /fetch-data endpoint
-```bash
 curl http://localhost:8080/fetch-data
-```
-
-### Test /verify endpoint
-```bash
 curl http://localhost:8080/verify
+curl http://localhost:8080/check
+curl http://localhost:8080/sync
+curl http://localhost:8080/process
 ```
 
-### Test /check endpoint
+### Metrics & Monitoring
 ```bash
-curl http://localhost:8080/check
+curl http://localhost:8080/metrics
 ```
+
+### Fault Injection & Testing
+```bash
+curl http://localhost:8080/warn
+curl http://localhost:8080/error
+curl http://localhost:8080/simulate-cpu
+curl http://localhost:8080/simulate-oom
+curl http://localhost:8080/delay/3
+```
+
+## Load Testing Distribution
+
+The load tester (`load-tester/main.py`) distributes requests across all endpoints with realistic production proportions:
+
+- **Health & Status endpoints:** 15%
+- **CRUD operations:** 25%
+- **Multi-service orchestration:** 20%
+- **Data operations:** 15%
+- **Status & operation tracking:** 10%
+- **Error scenarios:** 10%
+- **Latency simulation:** 5%
+
+This simulates real-world traffic patterns in production microservice environments.
 
 ## Tracing and Observability
 
@@ -236,6 +532,22 @@ All new endpoints automatically:
 
 This enables end-to-end distributed tracing through the microservice mesh.
 
+## Production Features
+
+✅ **CRUD Operations:** Full resource lifecycle management (create, read, update, delete, search)  
+✅ **Resource Management:** Auto-generated IDs, timestamps, and status tracking  
+✅ **Operation Tracking:** Status monitoring and rollback capabilities  
+✅ **Health Probes:** Kubernetes-ready health and readiness endpoints  
+✅ **Multi-Service Orchestration:** DAG-pattern based service composition  
+✅ **Distributed Tracing:** Full OpenTelemetry instrumentation  
+✅ **Metrics & Monitoring:** Service health and resource metrics  
+✅ **Fault Injection:** Built-in testing endpoints for chaos engineering  
+✅ **Error Handling:** Graceful failure handling across services  
+✅ **No Circular Dependencies:** Services only call downstream (higher levels)  
+✅ **Backward Compatible:** Original `/process` endpoint still works  
+✅ **Flexible Configuration:** Easy to adjust via environment variables  
+✅ **Realistic Load Testing:** Distributed requests matching production patterns  
+
 ## Guarantees
 
 ✅ **No Circular Dependencies:** Services only call downstream services (higher levels)
@@ -243,6 +555,8 @@ This enables end-to-end distributed tracing through the microservice mesh.
 ✅ **Observability:** Full distributed tracing support with OpenTelemetry
 ✅ **Backward Compatible:** Original `/process` endpoint still works
 ✅ **Flexible Configuration:** Easy to adjust service routing via environment variables
+✅ **Production Ready:** CRUD operations, state management, and health checks
+✅ **Realistic Traffic:** Load tester simulates real-world microservice patterns
 
 ## Adding New Services
 

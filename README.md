@@ -21,19 +21,37 @@ The system consists of the following 6 FastAPI microservices linked in a chain, 
 
 Each service exposes the following endpoints (with fault injection built-in):
 
-### Original Endpoints
--   `/health`: Returns 200 OK.
--   `/process`: Triggers a cascading call down the service chain (linear chain pattern).
+### Health & Status Endpoints
+-   `/health`: Returns 200 OK with service status and timestamp.
+-   `/ready`: Kubernetes readiness probe - checks if service is ready to accept traffic and reports resource count.
+
+### CRUD Operations (Production Resource Management)
+-   `/list`: Get list of all resources managed by the service.
+-   `/get/{resource_id}`: Get a specific resource by ID.
+-   `/create`: Create a new resource with auto-generated ID.
+-   `/update/{resource_id}`: Update an existing resource by ID.
+-   `/delete/{resource_id}`: Delete a resource by ID.
+-   `/search?query=<string>`: Search resources by query string.
+
+### Multi-Service Orchestration (DAG Pattern - No Circular Calls)
+-   `/process`: Triggers a cascading call down the service chain (original linear pattern).
+-   `/validate`: Validates through multiple downstream services configured via `VALIDATE_SERVICES_URL`.
+-   `/fetch-data`: Fetches aggregated data from multiple downstream services via `FETCH_SERVICES_URL`.
+-   `/verify`: Performs cross-service verification via `VERIFY_SERVICES_URL`.
+-   `/check`: Checks health status across multiple downstream services via `CHECK_SERVICES_URL`.
+-   `/sync`: Synchronizes state with downstream services configured via `SYNC_SERVICES_URL`.
+
+### Operation & State Management
+-   `/status/{operation_id}`: Get status of a previously executed operation.
+-   `/rollback/{operation_id}`: Rollback a previous operation (POST request).
+-   `/metrics`: Get service metrics including resource counts and health status.
+
+### Testing & Fault Injection
 -   `/warn`: Logs a warning with trace context.
 -   `/error`: Logs a deliberate error and throws a 500 HTTP Exception.
 -   `/simulate-oom`: Triggers a Python `MemoryError` and logs an OutOfMemory-like trace.
 -   `/simulate-cpu`: Spikes CPU usage for 2 seconds.
-
-### New Multi-Service Endpoints (DAG Pattern - No Circular Calls)
--   `/validate`: Validates through multiple downstream services configured via `VALIDATE_SERVICES_URL` environment variable.
--   `/fetch-data`: Fetches aggregated data from multiple downstream services configured via `FETCH_SERVICES_URL` environment variable.
--   `/verify`: Performs cross-service verification via `VERIFY_SERVICES_URL` environment variable.
--   `/check`: Checks health status across multiple downstream services configured via `CHECK_SERVICES_URL` environment variable.
+-   `/delay/{seconds}`: Simulate network latency by sleeping for N seconds (max 30).
 
 ### Service Dependency Graph (DAG Pattern)
 ```
@@ -59,6 +77,7 @@ Each service can be configured with the following environment variables (comma-s
 - `FETCH_SERVICES_URL`: Services to call for `/fetch-data` endpoint
 - `VERIFY_SERVICES_URL`: Services to call for `/verify` endpoint
 - `CHECK_SERVICES_URL`: Services to call for `/check` endpoint
+- `SYNC_SERVICES_URL`: Services to call for `/sync` endpoint
 
 These are configured in `helm/rca-demo/values.yaml` to follow a Directed Acyclic Graph (DAG) pattern, ensuring no circular API calls.
 
