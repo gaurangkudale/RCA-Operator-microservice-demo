@@ -13,24 +13,69 @@ services:
     env:
       - name: NEXT_SERVICE_URL
         value: "http://auth-service:8080"
+      # New multi-service endpoints (DAG pattern - no cycles)
+      - name: VALIDATE_SERVICES_URL
+        value: "http://auth-service:8080, http://user-service:8080"
+      - name: FETCH_SERVICES_URL
+        value: "http://auth-service:8080, http://order-service:8080"
+      - name: VERIFY_SERVICES_URL
+        value: "http://user-service:8080, http://payment-service:8080"
+      - name: CHECK_SERVICES_URL
+        value: "http://auth-service:8080, http://inventory-service:8080"
   - name: auth-service
     env:
       - name: NEXT_SERVICE_URL
         value: "http://user-service:8080"
+      # New multi-service endpoints
+      - name: VALIDATE_SERVICES_URL
+        value: "http://user-service:8080"
+      - name: FETCH_SERVICES_URL
+        value: "http://user-service:8080, http://order-service:8080"
+      - name: VERIFY_SERVICES_URL
+        value: "http://user-service:8080"
+      - name: CHECK_SERVICES_URL
+        value: "http://payment-service:8080"
   - name: user-service
     env:
       - name: NEXT_SERVICE_URL
         value: "http://order-service:8080"
+      # New multi-service endpoints
+      - name: VALIDATE_SERVICES_URL
+        value: "http://payment-service:8080, http://inventory-service:8080"
+      - name: FETCH_SERVICES_URL
+        value: "http://order-service:8080, http://payment-service:8080"
+      - name: VERIFY_SERVICES_URL
+        value: "http://inventory-service:8080"
+      - name: CHECK_SERVICES_URL
+        value: "http://payment-service:8080, http://inventory-service:8080"
   - name: order-service
     env:
       - name: NEXT_SERVICE_URL
         value: "http://payment-service:8080"
+      # New multi-service endpoints
+      - name: VALIDATE_SERVICES_URL
+        value: "http://payment-service:8080, http://inventory-service:8080"
+      - name: FETCH_SERVICES_URL
+        value: "http://payment-service:8080"
+      - name: VERIFY_SERVICES_URL
+        value: "http://inventory-service:8080"
+      - name: CHECK_SERVICES_URL
+        value: "http://inventory-service:8080"
   - name: payment-service
     env:
       - name: NEXT_SERVICE_URL
         value: "http://inventory-service:8080"
+      # New multi-service endpoints
+      - name: VALIDATE_SERVICES_URL
+        value: "http://inventory-service:8080"
+      - name: FETCH_SERVICES_URL
+        value: "http://inventory-service:8080"
+      - name: VERIFY_SERVICES_URL
+        value: "http://inventory-service:8080"
+      - name: CHECK_SERVICES_URL
+        value: "http://inventory-service:8080"
   - name: inventory-service
-    env: [] # End of chain
+    env: [] # End of chain - no downstream services
 
 telemetry:
   enabled: false  # Set to true to enable OTEL auto-instrumentation

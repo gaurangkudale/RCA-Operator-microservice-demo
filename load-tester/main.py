@@ -7,13 +7,18 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 TARGET_URL = os.getenv("TARGET_URL", "http://proxy-service:8080")
 
+# Original endpoints + new multi-service endpoints
 endpoints = [
-    ("/health", 0.2),       # 20% chance
-    ("/process", 0.2),      # 20% chance
-    ("/warn", 0.08),        # 8% chance
-    ("/error", 0.5),        # 50% chance (increased for error testing)
-    ("/simulate-oom", 0.01),# 1% chance
-    ("/simulate-cpu", 0.01),# 1% chance
+    ("/health", 0.15),          # 15% chance
+    ("/process", 0.15),         # 15% chance (original chain)
+    ("/validate", 0.15),        # 15% chance (new multi-service)
+    ("/fetch-data", 0.15),      # 15% chance (new multi-service)
+    ("/verify", 0.15),          # 15% chance (new multi-service)
+    ("/check", 0.15),           # 15% chance (new multi-service)
+    ("/warn", 0.05),            # 5% chance
+    ("/error", 0.05),           # 5% chance
+    ("/simulate-oom", 0.005),   # 0.5% chance
+    ("/simulate-cpu", 0.005),   # 0.5% chance
 ]
 
 def get_random_endpoint():
@@ -30,7 +35,7 @@ def run_load():
         endpoint = get_random_endpoint()
         url = f"{TARGET_URL}{endpoint}"
         try:
-            resp = requests.get(url, timeout=10)
+            resp = requests.get(url, timeout=15)
             logging.info(f"Called {url} - Status: {resp.status_code}")
         except Exception as e:
             logging.error(f"Failed to call {url}: {e}")
@@ -38,4 +43,5 @@ def run_load():
 
 if __name__ == "__main__":
     logging.info(f"Starting load tester targeting {TARGET_URL}")
+    logging.info(f"Testing endpoints: {[ep for ep, _ in endpoints]}")
     run_load()

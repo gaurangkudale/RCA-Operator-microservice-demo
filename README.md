@@ -20,12 +20,47 @@ The system consists of the following 6 FastAPI microservices linked in a chain, 
 ## API Endpoints
 
 Each service exposes the following endpoints (with fault injection built-in):
+
+### Original Endpoints
 -   `/health`: Returns 200 OK.
--   `/process`: Triggers a cascading call down the service chain.
+-   `/process`: Triggers a cascading call down the service chain (linear chain pattern).
 -   `/warn`: Logs a warning with trace context.
 -   `/error`: Logs a deliberate error and throws a 500 HTTP Exception.
 -   `/simulate-oom`: Triggers a Python `MemoryError` and logs an OutOfMemory-like trace.
 -   `/simulate-cpu`: Spikes CPU usage for 2 seconds.
+
+### New Multi-Service Endpoints (DAG Pattern - No Circular Calls)
+-   `/validate`: Validates through multiple downstream services configured via `VALIDATE_SERVICES_URL` environment variable.
+-   `/fetch-data`: Fetches aggregated data from multiple downstream services configured via `FETCH_SERVICES_URL` environment variable.
+-   `/verify`: Performs cross-service verification via `VERIFY_SERVICES_URL` environment variable.
+-   `/check`: Checks health status across multiple downstream services configured via `CHECK_SERVICES_URL` environment variable.
+
+### Service Dependency Graph (DAG Pattern)
+```
+                    proxy-service (entry point)
+                    /        |          \
+                   /         |           \
+            auth-service  user-service  order-service
+                 |        /        \          |
+                 |       /          \         |
+                 |      /            \        |
+                 |     /              \       |
+            user-service         payment-service
+                 |                    /       |
+                 |                   /        |
+                 |                  /         |
+                 |                 /          |
+            inventory-service ←----/----------/
+```
+
+**Environment Variables for Multi-Service Routing:**
+Each service can be configured with the following environment variables (comma-separated service URLs):
+- `VALIDATE_SERVICES_URL`: Services to call for `/validate` endpoint
+- `FETCH_SERVICES_URL`: Services to call for `/fetch-data` endpoint
+- `VERIFY_SERVICES_URL`: Services to call for `/verify` endpoint
+- `CHECK_SERVICES_URL`: Services to call for `/check` endpoint
+
+These are configured in `helm/rca-demo/values.yaml` to follow a Directed Acyclic Graph (DAG) pattern, ensuring no circular API calls.
 
 ## Setup Instructions
 
