@@ -7,7 +7,7 @@ import random
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List
-from common.telemetry import setup_telemetry
+from common.logging_setup import setup_logging
 
 
 E_COMMERCE_PRODUCTS = [
@@ -58,7 +58,7 @@ def ensure_service_role(service_name: str, allowed_services: List[str], operatio
 
 def create_app(service_name: str):
     app = FastAPI(title=service_name)
-    logger = setup_telemetry(service_name)
+    logger = setup_logging(service_name)
     
     # Mock in-memory storage for resources
     resources_db = {}

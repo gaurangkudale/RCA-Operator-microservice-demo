@@ -101,7 +101,6 @@ jobs:
         run: |
           helm repo add bitnami https://charts.bitnami.com/bitnami
           helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-          helm repo add jaegertracing https://jaegertracing.github.io/helm-charts
           helm repo add signoz https://charts.signoz.io
           helm repo update
 

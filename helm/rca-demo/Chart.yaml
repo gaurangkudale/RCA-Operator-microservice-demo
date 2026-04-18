@@ -10,10 +10,6 @@ dependencies:
     version: 29.2.0
     repository: https://prometheus-community.github.io/helm-charts
     condition: prometheus.enabled
-  - name: jaeger
-    version: 0.71.12
-    repository: https://jaegertracing.github.io/helm-charts
-    condition: jaeger.enabled
   - name: signoz
     version: 0.28.3
     repository: https://charts.signoz.io

@@ -144,10 +144,6 @@ services:
       - name: CHECK_SERVICES_URL
         value: "http://product-catalog-service:8080"
 
-telemetry:
-  enabled: false  # Set to true to enable OTEL auto-instrumentation
-  otlpEndpoint: "http://rca-demo-jaeger-collector:4317"
-
 # Dependencies
 postgresql:
   enabled: true
@@ -162,31 +158,7 @@ postgresql:
     database: "rca_demo"
 
 prometheus:
-  enabled: false  # Controlled by telemetry.enabled flag
-
-jaeger:
-  enabled: false  # Controlled by telemetry.enabled flag
-  allInOne:
-    enabled: true
-    service:
-      collector:
-        otlp:
-          grpc:
-            name: otlp-grpc
-            port: 4317
-          http:
-            name: otlp-http
-            port: 4318
-  collector:
-    enabled: false
-  query:
-    enabled: false
-  agent:
-    enabled: false
-  provisionDataStore:
-    cassandra: false
-  storage:
-    type: memory
+  enabled: false
 
 signoz:
   enabled: false # Disabled by default as it's heavy, enable if needed

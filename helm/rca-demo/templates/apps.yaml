@@ -19,25 +19,12 @@ spec:
         - name: {{ .name }}
           image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
-          {{- if $.Values.telemetry.enabled }}
-          command: ["opentelemetry-instrument"]
-          {{- end }}
           args: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
           ports:
             - containerPort: 8080
           env:
             - name: SERVICE_NAME
               value: {{ .name }}
-            {{- if $.Values.telemetry.enabled }}
-            - name: OTEL_SERVICE_NAME
-              value: {{ .name }}
-            - name: OTEL_TRACES_EXPORTER
-              value: "otlp"
-            - name: OTEL_EXPORTER_OTLP_PROTOCOL
-              value: "grpc"
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: {{ $.Values.telemetry.otlpEndpoint }}
-            {{- end }}
             - name: DATABASE_URL
               value: "postgres://postgres:password@{{ $.Release.Name }}-postgresql:5432/rca_demo"
             {{- range .env }}
