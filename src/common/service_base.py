@@ -1,10 +1,21 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body, Header
 import os
 import requests
 import time
 import json
+import random
+import uuid
 from datetime import datetime
+from typing import Any, Dict, List
 from common.telemetry import setup_telemetry
+
+
+E_COMMERCE_PRODUCTS = [
+    {"id": "sku-1001", "name": "Wireless Headphones", "price": 129.0, "category": "electronics", "stock": 52},
+    {"id": "sku-1002", "name": "Gaming Mouse", "price": 49.0, "category": "electronics", "stock": 18},
+    {"id": "sku-1003", "name": "Coffee Grinder", "price": 89.0, "category": "home", "stock": 7},
+    {"id": "sku-1004", "name": "Travel Backpack", "price": 110.0, "category": "outdoor", "stock": 34},
+]
 
 def parse_service_urls(env_var_name: str) -> list:
     """Parse comma-separated service URLs from environment variable."""
@@ -25,6 +36,26 @@ def call_downstream_service(urls: list, endpoint: str, logger) -> list:
             responses.append({"url": url, "status": "failed", "error": str(e)})
     return responses
 
+
+def resolve_request_id(x_request_id: str) -> str:
+    return x_request_id.strip() if x_request_id and x_request_id.strip() else f"req-{uuid.uuid4().hex[:12]}"
+
+
+def ensure_service_role(service_name: str, allowed_services: List[str], operation: str, logger, request_id: str):
+    if service_name not in allowed_services:
+        logger.warning(
+            json.dumps(
+                {
+                    "event": "invalid_service_route",
+                    "request_id": request_id,
+                    "operation": operation,
+                    "service": service_name,
+                    "allowed_services": allowed_services,
+                }
+            )
+        )
+        raise HTTPException(status_code=404, detail=f"{operation} is not exposed by {service_name}")
+
 def create_app(service_name: str):
     app = FastAPI(title=service_name)
     logger = setup_telemetry(service_name)
@@ -32,6 +63,11 @@ def create_app(service_name: str):
     # Mock in-memory storage for resources
     resources_db = {}
     operation_status = {}
+    carts_db: Dict[str, List[Dict[str, Any]]] = {}
+    orders_db: Dict[str, Dict[str, Any]] = {}
+    payments_db: Dict[str, Dict[str, Any]] = {}
+    shipments_db: Dict[str, Dict[str, Any]] = {}
+    ledger_db: List[Dict[str, Any]] = []
     
     # Optional downstream service to call (for backward compatibility)
     next_service_url = os.getenv("NEXT_SERVICE_URL")
@@ -42,6 +78,339 @@ def create_app(service_name: str):
     verify_services = parse_service_urls("VERIFY_SERVICES_URL")
     check_services = parse_service_urls("CHECK_SERVICES_URL")
     sync_services = parse_service_urls("SYNC_SERVICES_URL")
+
+    @app.get("/api/frontend/home")
+    def frontend_home(x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        ensure_service_role(service_name, ["frontend"], "frontend_home", logger, request_id)
+        logger.info(json.dumps({"event": "frontend_home_requested", "request_id": request_id, "service": service_name}))
+
+        catalog_data = call_downstream_service(fetch_services, "/api/products?limit=5", logger)
+        ad_data = call_downstream_service(validate_services, "/api/ads/placements", logger)
+        recommendation_data = call_downstream_service(verify_services, "/api/recommendations/guest-user", logger)
+
+        return {
+            "service": service_name,
+            "request_id": request_id,
+            "hero_banner": "Spring Sale - Up to 40% Off",
+            "catalog": catalog_data,
+            "ads": ad_data,
+            "recommendations": recommendation_data,
+        }
+
+    @app.get("/api/products")
+    def list_products(limit: int = 10, x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        ensure_service_role(service_name, ["product-catalog-service", "frontend"], "list_products", logger, request_id)
+        low_stock_items = [p["id"] for p in E_COMMERCE_PRODUCTS if p["stock"] < 10]
+        if low_stock_items:
+            logger.warning(
+                json.dumps(
+                    {
+                        "event": "inventory_low_stock",
+                        "request_id": request_id,
+                        "service": service_name,
+                        "skus": low_stock_items,
+                    }
+                )
+            )
+
+        return {
+            "service": service_name,
+            "request_id": request_id,
+            "products": E_COMMERCE_PRODUCTS[: max(1, min(limit, len(E_COMMERCE_PRODUCTS)))],
+            "count": min(limit, len(E_COMMERCE_PRODUCTS)),
+        }
+
+    @app.get("/api/products/{product_id}")
+    def get_product(product_id: str, x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        ensure_service_role(service_name, ["product-catalog-service", "frontend"], "get_product", logger, request_id)
+        product = next((p for p in E_COMMERCE_PRODUCTS if p["id"] == product_id), None)
+        if not product:
+            logger.warning(
+                json.dumps(
+                    {
+                        "event": "product_not_found",
+                        "request_id": request_id,
+                        "service": service_name,
+                        "product_id": product_id,
+                    }
+                )
+            )
+            raise HTTPException(status_code=404, detail=f"Product {product_id} not found")
+
+        return {"service": service_name, "request_id": request_id, "product": product}
+
+    @app.get("/api/reviews/{product_id}")
+    def get_product_reviews(product_id: str, x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        ensure_service_role(service_name, ["product-reviews-service"], "get_product_reviews", logger, request_id)
+        sentiment = random.choice(["positive", "neutral", "negative"])
+        if sentiment == "negative":
+            logger.warning(
+                json.dumps(
+                    {
+                        "event": "negative_review_trend",
+                        "request_id": request_id,
+                        "service": service_name,
+                        "product_id": product_id,
+                    }
+                )
+            )
+
+        return {
+            "service": service_name,
+            "request_id": request_id,
+            "product_id": product_id,
+            "reviews": [
+                {"review_id": f"rev-{product_id}-1", "rating": 5, "comment": "Great quality and delivery speed."},
+                {"review_id": f"rev-{product_id}-2", "rating": 3, "comment": "Packaging could be better."},
+            ],
+            "trend": sentiment,
+        }
+
+    @app.get("/api/recommendations/{user_id}")
+    def get_recommendations(user_id: str, x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        ensure_service_role(service_name, ["recommendation-service", "frontend"], "get_recommendations", logger, request_id)
+        if random.random() < 0.1:
+            logger.error(
+                json.dumps(
+                    {
+                        "event": "recommendation_model_timeout",
+                        "request_id": request_id,
+                        "service": service_name,
+                        "user_id": user_id,
+                    }
+                )
+            )
+            raise HTTPException(status_code=504, detail="Recommendation model timeout")
+
+        return {
+            "service": service_name,
+            "request_id": request_id,
+            "user_id": user_id,
+            "recommendations": random.sample(E_COMMERCE_PRODUCTS, k=2),
+        }
+
+    @app.post("/api/cart/{cart_id}/items")
+    def add_cart_item(cart_id: str, payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        ensure_service_role(service_name, ["cart-service"], "add_cart_item", logger, request_id)
+
+        product_id = payload.get("product_id", "sku-1001")
+        quantity = int(payload.get("quantity", 1))
+        carts_db.setdefault(cart_id, []).append({"product_id": product_id, "quantity": quantity})
+        logger.info(
+            json.dumps(
+                {
+                    "event": "cart_item_added",
+                    "request_id": request_id,
+                    "service": service_name,
+                    "cart_id": cart_id,
+                    "product_id": product_id,
+                    "quantity": quantity,
+                }
+            )
+        )
+
+        return {
+            "service": service_name,
+            "request_id": request_id,
+            "cart_id": cart_id,
+            "items": carts_db[cart_id],
+            "item_count": len(carts_db[cart_id]),
+        }
+
+    @app.get("/api/cart/{cart_id}")
+    def get_cart(cart_id: str, x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        ensure_service_role(service_name, ["cart-service", "checkout-service"], "get_cart", logger, request_id)
+        items = carts_db.get(cart_id, [])
+        if not items:
+            logger.warning(
+                json.dumps(
+                    {
+                        "event": "cart_empty",
+                        "request_id": request_id,
+                        "service": service_name,
+                        "cart_id": cart_id,
+                    }
+                )
+            )
+        return {"service": service_name, "request_id": request_id, "cart_id": cart_id, "items": items}
+
+    @app.post("/api/checkout/{cart_id}")
+    def checkout_cart(cart_id: str, payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        ensure_service_role(service_name, ["checkout-service", "frontend"], "checkout_cart", logger, request_id)
+
+        if random.random() < 0.08:
+            logger.error(
+                json.dumps(
+                    {
+                        "event": "checkout_dependency_failure",
+                        "request_id": request_id,
+                        "service": service_name,
+                        "cart_id": cart_id,
+                    }
+                )
+            )
+            raise HTTPException(status_code=503, detail="Checkout dependency unavailable")
+
+        order_id = f"ord-{uuid.uuid4().hex[:8]}"
+        orders_db[order_id] = {
+            "order_id": order_id,
+            "cart_id": cart_id,
+            "email": payload.get("email", "shopper@example.com"),
+            "status": "placed",
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        logger.info(
+            json.dumps(
+                {
+                    "event": "order_placed",
+                    "request_id": request_id,
+                    "service": service_name,
+                    "order_id": order_id,
+                    "cart_id": cart_id,
+                }
+            )
+        )
+
+        return {"service": service_name, "request_id": request_id, "order": orders_db[order_id]}
+
+    @app.post("/api/payments/authorize")
+    def authorize_payment(payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        ensure_service_role(service_name, ["payment-service"], "authorize_payment", logger, request_id)
+
+        payment_id = f"pay-{uuid.uuid4().hex[:8]}"
+        amount = float(payload.get("amount", 99.0))
+        if random.random() < 0.15:
+            logger.warning(
+                json.dumps(
+                    {
+                        "event": "payment_declined",
+                        "request_id": request_id,
+                        "service": service_name,
+                        "payment_id": payment_id,
+                        "amount": amount,
+                        "reason": "insufficient_funds",
+                    }
+                )
+            )
+            raise HTTPException(status_code=402, detail="Payment declined")
+
+        payments_db[payment_id] = {"payment_id": payment_id, "amount": amount, "status": "authorized"}
+        return {"service": service_name, "request_id": request_id, "payment": payments_db[payment_id]}
+
+    @app.get("/api/ads/placements")
+    def get_ads(x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        ensure_service_role(service_name, ["ad-service", "frontend"], "get_ads", logger, request_id)
+        if random.random() < 0.05:
+            logger.warning(
+                json.dumps(
+                    {
+                        "event": "ad_engine_degraded",
+                        "request_id": request_id,
+                        "service": service_name,
+                        "fallback": True,
+                    }
+                )
+            )
+
+        return {
+            "service": service_name,
+            "request_id": request_id,
+            "placements": [
+                {"slot": "hero", "campaign_id": "camp-summer-01", "cpc": 1.2},
+                {"slot": "sidebar", "campaign_id": "camp-gadgets-09", "cpc": 0.8},
+            ],
+        }
+
+    @app.post("/api/quotes/{cart_id}")
+    def create_quote(cart_id: str, payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        ensure_service_role(service_name, ["quote-service"], "create_quote", logger, request_id)
+        destination = payload.get("destination", "US")
+        shipping_cost = round(random.uniform(4.5, 19.0), 2)
+        tax = round(random.uniform(1.5, 7.5), 2)
+        return {
+            "service": service_name,
+            "request_id": request_id,
+            "cart_id": cart_id,
+            "quote": {"shipping": shipping_cost, "tax": tax, "destination": destination, "currency": "USD"},
+        }
+
+    @app.post("/api/shipping/label")
+    def create_shipping_label(payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        ensure_service_role(service_name, ["shipping-service"], "create_shipping_label", logger, request_id)
+
+        order_id = payload.get("order_id", "ord-unknown")
+        if random.random() < 0.1:
+            logger.error(
+                json.dumps(
+                    {
+                        "event": "carrier_api_error",
+                        "request_id": request_id,
+                        "service": service_name,
+                        "order_id": order_id,
+                    }
+                )
+            )
+            raise HTTPException(status_code=502, detail="Carrier API error")
+
+        shipment_id = f"shp-{uuid.uuid4().hex[:8]}"
+        shipments_db[shipment_id] = {"shipment_id": shipment_id, "order_id": order_id, "status": "label_created"}
+        return {"service": service_name, "request_id": request_id, "shipment": shipments_db[shipment_id]}
+
+    @app.post("/api/email/send")
+    def send_email(payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        ensure_service_role(service_name, ["email-service"], "send_email", logger, request_id)
+        recipient = payload.get("to", "customer@example.com")
+        template = payload.get("template", "order_confirmation")
+
+        if random.random() < 0.07:
+            logger.error(
+                json.dumps(
+                    {
+                        "event": "email_provider_throttled",
+                        "request_id": request_id,
+                        "service": service_name,
+                        "recipient": recipient,
+                    }
+                )
+            )
+            raise HTTPException(status_code=429, detail="Email provider throttled")
+
+        return {
+            "service": service_name,
+            "request_id": request_id,
+            "message_id": f"mail-{uuid.uuid4().hex[:8]}",
+            "recipient": recipient,
+            "template": template,
+            "status": "queued",
+        }
+
+    @app.post("/api/accounting/ledger")
+    def post_ledger_entry(payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        ensure_service_role(service_name, ["accounting-service"], "post_ledger_entry", logger, request_id)
+        entry = {
+            "entry_id": f"led-{uuid.uuid4().hex[:8]}",
+            "order_id": payload.get("order_id", "ord-unknown"),
+            "amount": float(payload.get("amount", 0.0)),
+            "currency": payload.get("currency", "USD"),
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        ledger_db.append(entry)
+        logger.info(json.dumps({"event": "ledger_entry_posted", "request_id": request_id, "service": service_name, "entry_id": entry["entry_id"]}))
+        return {"service": service_name, "request_id": request_id, "entry": entry}
 
     @app.get("/health")
     def health():
@@ -203,6 +572,11 @@ def create_app(service_name: str):
             "metrics": {
                 "total_resources": len(resources_db),
                 "total_operations": len(operation_status),
+                "active_carts": len(carts_db),
+                "orders": len(orders_db),
+                "payments": len(payments_db),
+                "shipments": len(shipments_db),
+                "ledger_entries": len(ledger_db),
                 "uptime_check": True,
                 "memory_healthy": True
             }

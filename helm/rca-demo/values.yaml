@@ -9,63 +9,117 @@ loadTesterImage:
   pullPolicy: Always
 
 services:
-  - name: proxy-service
+  - name: frontend
     env:
       - name: NEXT_SERVICE_URL
-        value: "http://auth-service:8080"
-      # New multi-service endpoints (DAG pattern - no cycles)
+        value: "http://cart-service:8080"
       - name: VALIDATE_SERVICES_URL
-        value: "http://auth-service:8080, http://user-service:8080"
+        value: "http://ad-service:8080"
       - name: FETCH_SERVICES_URL
-        value: "http://auth-service:8080, http://order-service:8080"
+        value: "http://product-catalog-service:8080"
       - name: VERIFY_SERVICES_URL
-        value: "http://user-service:8080, http://payment-service:8080"
+        value: "http://recommendation-service:8080"
       - name: CHECK_SERVICES_URL
-        value: "http://auth-service:8080, http://inventory-service:8080"
-  - name: auth-service
+        value: "http://checkout-service:8080, http://cart-service:8080"
+
+  - name: product-catalog-service
     env:
-      - name: NEXT_SERVICE_URL
-        value: "http://user-service:8080"
-      # New multi-service endpoints
       - name: VALIDATE_SERVICES_URL
-        value: "http://user-service:8080"
+        value: "http://product-reviews-service:8080"
       - name: FETCH_SERVICES_URL
-        value: "http://user-service:8080, http://order-service:8080"
+        value: "http://product-reviews-service:8080"
       - name: VERIFY_SERVICES_URL
-        value: "http://user-service:8080"
-      - name: CHECK_SERVICES_URL
-        value: "http://payment-service:8080"
-  - name: user-service
-    env:
-      - name: NEXT_SERVICE_URL
-        value: "http://order-service:8080"
-      # New multi-service endpoints
-      - name: VALIDATE_SERVICES_URL
-        value: "http://payment-service:8080, http://inventory-service:8080"
-      - name: FETCH_SERVICES_URL
-        value: "http://order-service:8080, http://payment-service:8080"
-      - name: VERIFY_SERVICES_URL
-        value: "http://inventory-service:8080"
-      - name: CHECK_SERVICES_URL
-        value: "http://payment-service:8080, http://inventory-service:8080"
-  - name: order-service
-    env:
-      - name: NEXT_SERVICE_URL
-        value: "http://payment-service:8080"
-      # New multi-service endpoints
-      - name: VALIDATE_SERVICES_URL
-        value: "http://payment-service:8080, http://inventory-service:8080"
-      - name: FETCH_SERVICES_URL
-        value: "http://payment-service:8080"
-      - name: VERIFY_SERVICES_URL
-        value: "http://inventory-service:8080"
+        value: "http://recommendation-service:8080"
       - name: CHECK_SERVICES_URL
         value: "http://inventory-service:8080"
+
+  - name: product-reviews-service
+    env:
+      - name: VALIDATE_SERVICES_URL
+        value: "http://product-catalog-service:8080"
+      - name: FETCH_SERVICES_URL
+        value: "http://product-catalog-service:8080"
+      - name: VERIFY_SERVICES_URL
+        value: "http://recommendation-service:8080"
+      - name: CHECK_SERVICES_URL
+        value: "http://product-catalog-service:8080"
+
+  - name: recommendation-service
+    env:
+      - name: VALIDATE_SERVICES_URL
+        value: "http://product-catalog-service:8080"
+      - name: FETCH_SERVICES_URL
+        value: "http://product-reviews-service:8080"
+      - name: VERIFY_SERVICES_URL
+        value: "http://quote-service:8080"
+      - name: CHECK_SERVICES_URL
+        value: "http://product-catalog-service:8080"
+
+  - name: ad-service
+    env:
+      - name: NEXT_SERVICE_URL
+        value: "http://recommendation-service:8080"
+      - name: VALIDATE_SERVICES_URL
+        value: "http://recommendation-service:8080"
+      - name: FETCH_SERVICES_URL
+        value: "http://recommendation-service:8080"
+      - name: VERIFY_SERVICES_URL
+        value: "http://product-catalog-service:8080"
+      - name: CHECK_SERVICES_URL
+        value: "http://recommendation-service:8080"
+
+  - name: cart-service
+    env:
+      - name: NEXT_SERVICE_URL
+        value: "http://checkout-service:8080"
+      - name: VALIDATE_SERVICES_URL
+        value: "http://product-catalog-service:8080"
+      - name: FETCH_SERVICES_URL
+        value: "http://product-catalog-service:8080, http://product-reviews-service:8080"
+      - name: VERIFY_SERVICES_URL
+        value: "http://quote-service:8080"
+      - name: CHECK_SERVICES_URL
+        value: "http://checkout-service:8080"
+
+  - name: checkout-service
+    env:
+      - name: NEXT_SERVICE_URL
+        value: "http://payment-service:8080"
+      - name: VALIDATE_SERVICES_URL
+        value: "http://cart-service:8080, http://quote-service:8080"
+      - name: FETCH_SERVICES_URL
+        value: "http://cart-service:8080, http://quote-service:8080"
+      - name: VERIFY_SERVICES_URL
+        value: "http://payment-service:8080, http://shipping-service:8080"
+      - name: CHECK_SERVICES_URL
+        value: "http://email-service:8080, http://accounting-service:8080"
+
   - name: payment-service
     env:
       - name: NEXT_SERVICE_URL
-        value: "http://inventory-service:8080"
-      # New multi-service endpoints
+        value: "http://accounting-service:8080"
+      - name: VALIDATE_SERVICES_URL
+        value: "http://accounting-service:8080"
+      - name: FETCH_SERVICES_URL
+        value: "http://accounting-service:8080"
+      - name: VERIFY_SERVICES_URL
+        value: "http://accounting-service:8080"
+      - name: CHECK_SERVICES_URL
+        value: "http://accounting-service:8080"
+
+  - name: shipping-service
+    env:
+      - name: VALIDATE_SERVICES_URL
+        value: "http://quote-service:8080"
+      - name: FETCH_SERVICES_URL
+        value: "http://quote-service:8080"
+      - name: VERIFY_SERVICES_URL
+        value: "http://quote-service:8080"
+      - name: CHECK_SERVICES_URL
+        value: "http://quote-service:8080"
+
+  - name: quote-service
+    env:
       - name: VALIDATE_SERVICES_URL
         value: "http://inventory-service:8080"
       - name: FETCH_SERVICES_URL
@@ -74,8 +128,21 @@ services:
         value: "http://inventory-service:8080"
       - name: CHECK_SERVICES_URL
         value: "http://inventory-service:8080"
+
+  - name: email-service
+    env:
+      - name: CHECK_SERVICES_URL
+        value: "http://frontend:8080"
+
+  - name: accounting-service
+    env:
+      - name: CHECK_SERVICES_URL
+        value: "http://payment-service:8080"
+
   - name: inventory-service
-    env: [] # End of chain - no downstream services
+    env:
+      - name: CHECK_SERVICES_URL
+        value: "http://product-catalog-service:8080"
 
 telemetry:
   enabled: false  # Set to true to enable OTEL auto-instrumentation

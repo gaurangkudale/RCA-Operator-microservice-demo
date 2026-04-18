@@ -1,19 +1,26 @@
 # RCA-Operator Microservice Demo
 
-This repository contains a 6-microservice architecture, a load tester, and a comprehensive Helm chart designed to test the Phase 2 correlation engine of the [RCA-Operator](https://github.com/gaurangkudale/RCA-Operator/pull/111).
+This repository contains a realistic e-commerce microservice simulator, a load generator, and a comprehensive Helm chart designed to test the Phase 2 correlation engine of the [RCA-Operator](https://github.com/gaurangkudale/RCA-Operator/pull/111).
 
 ## Architecture
 
-The system consists of the following 6 FastAPI microservices linked in a chain, each equipped with OpenTelemetry (traces, metrics, and logs):
-1.  `proxy-service`
-2.  `auth-service`
-3.  `user-service`
-4.  `order-service`
-5.  `payment-service`
-6.  `inventory-service`
+The system consists of the following e-commerce services (all FastAPI services with traces, metrics, and structured logs):
+1.  `frontend`
+2.  `ad-service`
+3.  `product-catalog-service`
+4.  `product-reviews-service`
+5.  `recommendation-service`
+6.  `cart-service`
+7.  `checkout-service`
+8.  `payment-service`
+9.  `shipping-service`
+10. `quote-service`
+11. `email-service`
+12. `accounting-service`
+13. `inventory-service`
 
 **Supporting Services:**
--   **Load Tester**: A Python script continuously calling the `proxy-service` with a random mix of success and failure requests (4xx, 5xx, CPU spikes, OOM simulations).
+-   **Load Generator**: A Python script continuously generating realistic shopper traffic (browse, cart, checkout, payment, shipping, email, accounting) plus controlled failure patterns.
 -   **PostgreSQL**: A simple database provisioned via the Bitnami Helm chart dependency.
 -   **Observability Stack**: Prometheus (for RED metrics), Jaeger (for Distributed Traces), and optionally Signoz.
 
@@ -33,7 +40,21 @@ Each service exposes the following endpoints (with fault injection built-in):
 -   `/delete/{resource_id}`: Delete a resource by ID.
 -   `/search?query=<string>`: Search resources by query string.
 
-### Multi-Service Orchestration (DAG Pattern - No Circular Calls)
+### E-Commerce APIs (Real-World Workflows)
+-   `/api/frontend/home`: Aggregates catalog, ads, and recommendations.
+-   `/api/products` and `/api/products/{product_id}`: Product catalog browse flows.
+-   `/api/reviews/{product_id}`: Product review retrieval.
+-   `/api/recommendations/{user_id}`: Recommendation engine output (with occasional model timeout).
+-   `/api/cart/{cart_id}/items` (POST): Add item to cart.
+-   `/api/cart/{cart_id}`: Retrieve cart state.
+-   `/api/checkout/{cart_id}` (POST): Place an order.
+-   `/api/payments/authorize` (POST): Payment authorization (with realistic declines).
+-   `/api/quotes/{cart_id}` (POST): Shipping and tax quote generation.
+-   `/api/shipping/label` (POST): Shipping label creation (with carrier-side failures).
+-   `/api/email/send` (POST): Customer notification flow (with provider throttling).
+-   `/api/accounting/ledger` (POST): Financial ledger write path.
+
+### Multi-Service Orchestration (DAG Pattern)
 -   `/process`: Triggers a cascading call down the service chain (original linear pattern).
 -   `/validate`: Validates through multiple downstream services configured via `VALIDATE_SERVICES_URL`.
 -   `/fetch-data`: Fetches aggregated data from multiple downstream services via `FETCH_SERVICES_URL`.
@@ -55,20 +76,22 @@ Each service exposes the following endpoints (with fault injection built-in):
 
 ### Service Dependency Graph (DAG Pattern)
 ```
-                    proxy-service (entry point)
-                    /        |          \
-                   /         |           \
-            auth-service  user-service  order-service
-                 |        /        \          |
-                 |       /          \         |
-                 |      /            \        |
-                 |     /              \       |
-            user-service         payment-service
-                 |                    /       |
-                 |                   /        |
-                 |                  /         |
-                 |                 /          |
-            inventory-service ←----/----------/
+                     frontend (entry point)
+                  /      |         \
+                   /       |          \
+            ad-service  product-catalog  recommendation
+               |            |               |
+               |      product-reviews       |
+               |            |               |
+               \------------|---------------/
+                        |
+                      cart-service
+                        |
+                     checkout-service
+                  /      |         \
+               payment   shipping     email
+                |         |           |
+            accounting   quote      accounting
 ```
 
 **Environment Variables for Multi-Service Routing:**
@@ -79,7 +102,7 @@ Each service can be configured with the following environment variables (comma-s
 - `CHECK_SERVICES_URL`: Services to call for `/check` endpoint
 - `SYNC_SERVICES_URL`: Services to call for `/sync` endpoint
 
-These are configured in `helm/rca-demo/values.yaml` to follow a Directed Acyclic Graph (DAG) pattern, ensuring no circular API calls.
+These are configured in `helm/rca-demo/values.yaml` to represent realistic dependencies for incident correlation and blast-radius analysis.
 
 ## Setup Instructions
 
@@ -146,7 +169,7 @@ Check that all pods are running successfully:
 kubectl get pods -n rca-demo
 ```
 
-The load tester pod should start hitting the `proxy-service` automatically, which in turn calls the other services, generating rich telemetry data.
+The load generator pod starts hitting the `frontend` and other core services automatically, generating rich telemetry data with realistic request IDs, warnings, and error bursts.
 
 ### 5. Access the Observability UIs
 

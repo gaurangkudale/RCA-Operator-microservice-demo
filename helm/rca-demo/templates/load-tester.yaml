@@ -19,5 +19,7 @@ spec:
           image: "{{ .Values.loadTesterImage.repository }}:{{ .Values.loadTesterImage.tag }}"
           imagePullPolicy: {{ .Values.loadTesterImage.pullPolicy }}
           env:
+            - name: FRONTEND_URL
+              value: "http://frontend:8080"
             - name: TARGET_URL
-              value: "http://proxy-service:8080"
+              value: "http://frontend:8080"
