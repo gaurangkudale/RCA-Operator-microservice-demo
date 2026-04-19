@@ -11,138 +11,72 @@ loadTesterImage:
 services:
   - name: frontend
     env:
-      - name: NEXT_SERVICE_URL
-        value: "http://cart-service:8080"
-      - name: VALIDATE_SERVICES_URL
-        value: "http://ad-service:8080"
-      - name: FETCH_SERVICES_URL
-        value: "http://product-catalog-service:8080"
-      - name: VERIFY_SERVICES_URL
-        value: "http://recommendation-service:8080"
-      - name: CHECK_SERVICES_URL
-        value: "http://checkout-service:8080, http://cart-service:8080"
-
-  - name: product-catalog-service
-    env:
-      - name: VALIDATE_SERVICES_URL
-        value: "http://product-reviews-service:8080"
-      - name: FETCH_SERVICES_URL
-        value: "http://product-reviews-service:8080"
-      - name: VERIFY_SERVICES_URL
-        value: "http://recommendation-service:8080"
-      - name: CHECK_SERVICES_URL
-        value: "http://inventory-service:8080"
-
-  - name: product-reviews-service
-    env:
-      - name: VALIDATE_SERVICES_URL
-        value: "http://product-catalog-service:8080"
-      - name: FETCH_SERVICES_URL
-        value: "http://product-catalog-service:8080"
-      - name: VERIFY_SERVICES_URL
-        value: "http://recommendation-service:8080"
-      - name: CHECK_SERVICES_URL
-        value: "http://product-catalog-service:8080"
-
-  - name: recommendation-service
-    env:
-      - name: VALIDATE_SERVICES_URL
-        value: "http://product-catalog-service:8080"
-      - name: FETCH_SERVICES_URL
-        value: "http://product-reviews-service:8080"
-      - name: VERIFY_SERVICES_URL
-        value: "http://quote-service:8080"
-      - name: CHECK_SERVICES_URL
-        value: "http://product-catalog-service:8080"
+      - name: PRODUCT_CATALOG_URL
+        value: "http://product-catalog:8080"
+      - name: CART_URL
+        value: "http://cart:8080"
+      - name: CHECKOUT_URL
+        value: "http://checkout:8080"
 
   - name: ad-service
     env:
-      - name: NEXT_SERVICE_URL
-        value: "http://recommendation-service:8080"
-      - name: VALIDATE_SERVICES_URL
-        value: "http://recommendation-service:8080"
-      - name: FETCH_SERVICES_URL
-        value: "http://recommendation-service:8080"
-      - name: VERIFY_SERVICES_URL
-        value: "http://product-catalog-service:8080"
-      - name: CHECK_SERVICES_URL
-        value: "http://recommendation-service:8080"
+      - name: AD_DELAY_PROB
+        value: "0.2"
+      - name: AD_ERROR_PROB
+        value: "0.03"
 
-  - name: cart-service
+  - name: product-catalog
     env:
-      - name: NEXT_SERVICE_URL
-        value: "http://checkout-service:8080"
-      - name: VALIDATE_SERVICES_URL
-        value: "http://product-catalog-service:8080"
-      - name: FETCH_SERVICES_URL
-        value: "http://product-catalog-service:8080, http://product-reviews-service:8080"
-      - name: VERIFY_SERVICES_URL
-        value: "http://quote-service:8080"
-      - name: CHECK_SERVICES_URL
-        value: "http://checkout-service:8080"
+      - name: CATALOG_LATENCY_PROB
+        value: "0.2"
+      - name: CATALOG_ERROR_PROB
+        value: "0.05"
 
-  - name: checkout-service
+  - name: cart
     env:
-      - name: NEXT_SERVICE_URL
-        value: "http://payment-service:8080"
-      - name: VALIDATE_SERVICES_URL
-        value: "http://cart-service:8080, http://quote-service:8080"
-      - name: FETCH_SERVICES_URL
-        value: "http://cart-service:8080, http://quote-service:8080"
-      - name: VERIFY_SERVICES_URL
-        value: "http://payment-service:8080, http://shipping-service:8080"
-      - name: CHECK_SERVICES_URL
-        value: "http://email-service:8080, http://accounting-service:8080"
+      - name: PRODUCT_CATALOG_URL
+        value: "http://product-catalog:8080"
 
-  - name: payment-service
+  - name: quote
     env:
-      - name: NEXT_SERVICE_URL
-        value: "http://accounting-service:8080"
-      - name: VALIDATE_SERVICES_URL
-        value: "http://accounting-service:8080"
-      - name: FETCH_SERVICES_URL
-        value: "http://accounting-service:8080"
-      - name: VERIFY_SERVICES_URL
-        value: "http://accounting-service:8080"
-      - name: CHECK_SERVICES_URL
-        value: "http://accounting-service:8080"
+      - name: PRODUCT_CATALOG_URL
+        value: "http://product-catalog:8080"
+      - name: AD_SERVICE_URL
+        value: "http://ad-service:8080"
+      - name: QUOTE_MISMATCH_RATE
+        value: "0.05"
 
-  - name: shipping-service
+  - name: payment
     env:
-      - name: VALIDATE_SERVICES_URL
-        value: "http://quote-service:8080"
-      - name: FETCH_SERVICES_URL
-        value: "http://quote-service:8080"
-      - name: VERIFY_SERVICES_URL
-        value: "http://quote-service:8080"
-      - name: CHECK_SERVICES_URL
-        value: "http://quote-service:8080"
+      - name: PAYMENT_FAILURE_RATE
+        value: "0.15"
+      - name: PAYMENT_SLOW_PROB
+        value: "0.2"
 
-  - name: quote-service
+  - name: shipping
     env:
-      - name: VALIDATE_SERVICES_URL
-        value: "http://inventory-service:8080"
-      - name: FETCH_SERVICES_URL
-        value: "http://inventory-service:8080"
-      - name: VERIFY_SERVICES_URL
-        value: "http://inventory-service:8080"
-      - name: CHECK_SERVICES_URL
-        value: "http://inventory-service:8080"
+      - name: SHIPPING_FAILURE_RATE
+        value: "0.1"
+      - name: SHIPPING_WARNING_RATE
+        value: "0.2"
 
-  - name: email-service
+  - name: email
     env:
-      - name: CHECK_SERVICES_URL
-        value: "http://frontend:8080"
+      - name: EMAIL_WARNING_RATE
+        value: "0.1"
 
-  - name: accounting-service
+  - name: checkout
     env:
-      - name: CHECK_SERVICES_URL
-        value: "http://payment-service:8080"
-
-  - name: inventory-service
-    env:
-      - name: CHECK_SERVICES_URL
-        value: "http://product-catalog-service:8080"
+      - name: CART_URL
+        value: "http://cart:8080"
+      - name: QUOTE_URL
+        value: "http://quote:8080"
+      - name: PAYMENT_URL
+        value: "http://payment:8080"
+      - name: SHIPPING_URL
+        value: "http://shipping:8080"
+      - name: EMAIL_URL
+        value: "http://email:8080"
 
 # Dependencies
 postgresql:

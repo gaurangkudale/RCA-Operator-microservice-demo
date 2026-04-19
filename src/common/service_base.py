@@ -6,7 +6,7 @@ import json
 import random
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, Optional
 from common.logging_setup import setup_logging
 
 
@@ -17,717 +17,592 @@ E_COMMERCE_PRODUCTS = [
     {"id": "sku-1004", "name": "Travel Backpack", "price": 110.0, "category": "outdoor", "stock": 34},
 ]
 
-def parse_service_urls(env_var_name: str) -> list:
-    """Parse comma-separated service URLs from environment variable."""
-    urls = os.getenv(env_var_name, "")
-    return [url.strip() for url in urls.split(",") if url.strip()]
 
-def call_downstream_service(urls: list, endpoint: str, logger) -> list:
-    """Call multiple downstream services and collect responses."""
-    responses = []
-    for url in urls:
-        try:
-            logger.info(f"Calling downstream service {url}{endpoint}")
-            resp = requests.get(f"{url}{endpoint}", timeout=5)
-            resp.raise_for_status()
-            responses.append({"url": url, "status": resp.status_code, "data": resp.json()})
-        except Exception as e:
-            logger.error(f"Failed to call {url}{endpoint}: {e}", exc_info=True)
-            responses.append({"url": url, "status": "failed", "error": str(e)})
-    return responses
+def env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return max(0.0, min(1.0, float(raw)))
+    except ValueError:
+        return default
 
 
 def resolve_request_id(x_request_id: str) -> str:
     return x_request_id.strip() if x_request_id and x_request_id.strip() else f"req-{uuid.uuid4().hex[:12]}"
 
 
-def ensure_service_role(service_name: str, allowed_services: List[str], operation: str, logger, request_id: str):
-    if service_name not in allowed_services:
-        logger.warning(
-            json.dumps(
-                {
-                    "event": "invalid_service_route",
-                    "request_id": request_id,
-                    "operation": operation,
-                    "service": service_name,
-                    "allowed_services": allowed_services,
-                }
-            )
-        )
-        raise HTTPException(status_code=404, detail=f"{operation} is not exposed by {service_name}")
+def canonical_service(name: str) -> str:
+    if name.endswith("-service"):
+        return name[:-8]
+    return name
+
+
+def is_service(service_name: str, *allowed: str) -> bool:
+    candidate = canonical_service(service_name)
+    return candidate in {canonical_service(s) for s in allowed}
+
+
+def log_event(logger, level: str, service_name: str, endpoint: str, request_id: str, message: str, dependency: Optional[str] = None, **extra):
+    payload = {
+        "service_name": service_name,
+        "endpoint": endpoint,
+        "request_id": request_id,
+        "dependency": dependency or "",
+        "message": message,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    payload.update(extra)
+    line = json.dumps(payload)
+    if level == "error":
+        logger.error(line)
+    elif level == "warning":
+        logger.warning(line)
+    else:
+        logger.info(line)
+
+
+def call_service(base_url: str, method: str, endpoint: str, logger, service_name: str, request_id: str, dependency: str, payload: Optional[Dict[str, Any]] = None, timeout: int = 6):
+    if not base_url:
+        raise RuntimeError(f"Missing URL for dependency {dependency}")
+
+    started_at = time.time()
+    response = requests.request(
+        method=method,
+        url=f"{base_url}{endpoint}",
+        headers={"x-request-id": request_id},
+        json=payload,
+        timeout=timeout,
+    )
+    latency_ms = int((time.time() - started_at) * 1000)
+    return response, latency_ms
+
 
 def create_app(service_name: str):
     app = FastAPI(title=service_name)
     logger = setup_logging(service_name)
-    
-    # Mock in-memory storage for resources
-    resources_db = {}
-    operation_status = {}
-    carts_db: Dict[str, List[Dict[str, Any]]] = {}
+
+    carts_db: Dict[str, list] = {}
     orders_db: Dict[str, Dict[str, Any]] = {}
     payments_db: Dict[str, Dict[str, Any]] = {}
     shipments_db: Dict[str, Dict[str, Any]] = {}
-    ledger_db: List[Dict[str, Any]] = []
-    
-    # Optional downstream service to call (for backward compatibility)
-    next_service_url = os.getenv("NEXT_SERVICE_URL")
-    
-    # Parse multi-service URLs for new endpoints (DAG pattern - no cycles)
-    validate_services = parse_service_urls("VALIDATE_SERVICES_URL")
-    fetch_services = parse_service_urls("FETCH_SERVICES_URL")
-    verify_services = parse_service_urls("VERIFY_SERVICES_URL")
-    check_services = parse_service_urls("CHECK_SERVICES_URL")
-    sync_services = parse_service_urls("SYNC_SERVICES_URL")
 
-    @app.get("/api/frontend/home")
-    def frontend_home(x_request_id: str = Header(default="")):
-        request_id = resolve_request_id(x_request_id)
-        ensure_service_role(service_name, ["frontend"], "frontend_home", logger, request_id)
-        logger.info(json.dumps({"event": "frontend_home_requested", "request_id": request_id, "service": service_name}))
+    product_catalog_url = os.getenv("PRODUCT_CATALOG_URL", "")
+    cart_url = os.getenv("CART_URL", "")
+    checkout_url = os.getenv("CHECKOUT_URL", "")
+    quote_url = os.getenv("QUOTE_URL", "")
+    payment_url = os.getenv("PAYMENT_URL", "")
+    shipping_url = os.getenv("SHIPPING_URL", "")
+    email_url = os.getenv("EMAIL_URL", "")
+    ad_service_url = os.getenv("AD_SERVICE_URL", "")
 
-        catalog_data = call_downstream_service(fetch_services, "/api/products?limit=5", logger)
-        ad_data = call_downstream_service(validate_services, "/api/ads/placements", logger)
-        recommendation_data = call_downstream_service(verify_services, "/api/recommendations/guest-user", logger)
+    payment_failure_rate = env_float("PAYMENT_FAILURE_RATE", 0.15)
+    payment_slow_prob = env_float("PAYMENT_SLOW_PROB", 0.2)
+    shipping_failure_rate = env_float("SHIPPING_FAILURE_RATE", 0.1)
+    shipping_warning_rate = env_float("SHIPPING_WARNING_RATE", 0.2)
+    catalog_latency_prob = env_float("CATALOG_LATENCY_PROB", 0.2)
+    catalog_error_prob = env_float("CATALOG_ERROR_PROB", 0.05)
+    ad_delay_prob = env_float("AD_DELAY_PROB", 0.2)
+    ad_error_prob = env_float("AD_ERROR_PROB", 0.03)
+    quote_mismatch_rate = env_float("QUOTE_MISMATCH_RATE", 0.05)
+    email_warning_rate = env_float("EMAIL_WARNING_RATE", 0.1)
 
-        return {
-            "service": service_name,
-            "request_id": request_id,
-            "hero_banner": "Spring Sale - Up to 40% Off",
-            "catalog": catalog_data,
-            "ads": ad_data,
-            "recommendations": recommendation_data,
-        }
+    def execute_checkout(payload: Dict[str, Any], request_id: str):
+        user_id = payload.get("userId", "user-100")
+        payment_method = payload.get("paymentMethod", "card")
+        email = payload.get("email", "buyer@example.com")
 
-    @app.get("/api/products")
-    def list_products(limit: int = 10, x_request_id: str = Header(default="")):
-        request_id = resolve_request_id(x_request_id)
-        ensure_service_role(service_name, ["product-catalog-service", "frontend"], "list_products", logger, request_id)
-        low_stock_items = [p["id"] for p in E_COMMERCE_PRODUCTS if p["stock"] < 10]
-        if low_stock_items:
-            logger.warning(
-                json.dumps(
-                    {
-                        "event": "inventory_low_stock",
-                        "request_id": request_id,
-                        "service": service_name,
-                        "skus": low_stock_items,
-                    }
-                )
+        try:
+            cart_resp, cart_latency = call_service(
+                cart_url,
+                "GET",
+                f"/cart/{user_id}",
+                logger,
+                service_name,
+                request_id,
+                dependency="cart",
             )
+            cart_resp.raise_for_status()
+            items = cart_resp.json().get("items", [])
+            if not items:
+                log_event(logger, "warning", service_name, "/checkout", request_id, "Checkout requested with empty cart", dependency="cart")
+                raise HTTPException(status_code=400, detail="Cart is empty")
+            log_event(logger, "info", service_name, "/checkout", request_id, "Cart loaded", dependency="cart", latency_ms=cart_latency)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            log_event(logger, "error", service_name, "/checkout", request_id, "Failed to fetch cart", dependency="cart", error=str(exc))
+            raise HTTPException(status_code=502, detail="Cart unavailable")
 
-        return {
-            "service": service_name,
-            "request_id": request_id,
-            "products": E_COMMERCE_PRODUCTS[: max(1, min(limit, len(E_COMMERCE_PRODUCTS)))],
-            "count": min(limit, len(E_COMMERCE_PRODUCTS)),
-        }
-
-    @app.get("/api/products/{product_id}")
-    def get_product(product_id: str, x_request_id: str = Header(default="")):
-        request_id = resolve_request_id(x_request_id)
-        ensure_service_role(service_name, ["product-catalog-service", "frontend"], "get_product", logger, request_id)
-        product = next((p for p in E_COMMERCE_PRODUCTS if p["id"] == product_id), None)
-        if not product:
-            logger.warning(
-                json.dumps(
-                    {
-                        "event": "product_not_found",
-                        "request_id": request_id,
-                        "service": service_name,
-                        "product_id": product_id,
-                    }
-                )
+        try:
+            quote_resp, quote_latency = call_service(
+                quote_url,
+                "POST",
+                "/quote",
+                logger,
+                service_name,
+                request_id,
+                dependency="quote",
+                payload={"userId": user_id, "items": items},
             )
-            raise HTTPException(status_code=404, detail=f"Product {product_id} not found")
-
-        return {"service": service_name, "request_id": request_id, "product": product}
-
-    @app.get("/api/reviews/{product_id}")
-    def get_product_reviews(product_id: str, x_request_id: str = Header(default="")):
-        request_id = resolve_request_id(x_request_id)
-        ensure_service_role(service_name, ["product-reviews-service"], "get_product_reviews", logger, request_id)
-        sentiment = random.choice(["positive", "neutral", "negative"])
-        if sentiment == "negative":
-            logger.warning(
-                json.dumps(
-                    {
-                        "event": "negative_review_trend",
-                        "request_id": request_id,
-                        "service": service_name,
-                        "product_id": product_id,
-                    }
-                )
-            )
-
-        return {
-            "service": service_name,
-            "request_id": request_id,
-            "product_id": product_id,
-            "reviews": [
-                {"review_id": f"rev-{product_id}-1", "rating": 5, "comment": "Great quality and delivery speed."},
-                {"review_id": f"rev-{product_id}-2", "rating": 3, "comment": "Packaging could be better."},
-            ],
-            "trend": sentiment,
-        }
-
-    @app.get("/api/recommendations/{user_id}")
-    def get_recommendations(user_id: str, x_request_id: str = Header(default="")):
-        request_id = resolve_request_id(x_request_id)
-        ensure_service_role(service_name, ["recommendation-service", "frontend"], "get_recommendations", logger, request_id)
-        if random.random() < 0.1:
-            logger.error(
-                json.dumps(
-                    {
-                        "event": "recommendation_model_timeout",
-                        "request_id": request_id,
-                        "service": service_name,
-                        "user_id": user_id,
-                    }
-                )
-            )
-            raise HTTPException(status_code=504, detail="Recommendation model timeout")
-
-        return {
-            "service": service_name,
-            "request_id": request_id,
-            "user_id": user_id,
-            "recommendations": random.sample(E_COMMERCE_PRODUCTS, k=2),
-        }
-
-    @app.post("/api/cart/{cart_id}/items")
-    def add_cart_item(cart_id: str, payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
-        request_id = resolve_request_id(x_request_id)
-        ensure_service_role(service_name, ["cart-service"], "add_cart_item", logger, request_id)
-
-        product_id = payload.get("product_id", "sku-1001")
-        quantity = int(payload.get("quantity", 1))
-        carts_db.setdefault(cart_id, []).append({"product_id": product_id, "quantity": quantity})
-        logger.info(
-            json.dumps(
-                {
-                    "event": "cart_item_added",
-                    "request_id": request_id,
-                    "service": service_name,
-                    "cart_id": cart_id,
-                    "product_id": product_id,
-                    "quantity": quantity,
-                }
-            )
-        )
-
-        return {
-            "service": service_name,
-            "request_id": request_id,
-            "cart_id": cart_id,
-            "items": carts_db[cart_id],
-            "item_count": len(carts_db[cart_id]),
-        }
-
-    @app.get("/api/cart/{cart_id}")
-    def get_cart(cart_id: str, x_request_id: str = Header(default="")):
-        request_id = resolve_request_id(x_request_id)
-        ensure_service_role(service_name, ["cart-service", "checkout-service"], "get_cart", logger, request_id)
-        items = carts_db.get(cart_id, [])
-        if not items:
-            logger.warning(
-                json.dumps(
-                    {
-                        "event": "cart_empty",
-                        "request_id": request_id,
-                        "service": service_name,
-                        "cart_id": cart_id,
-                    }
-                )
-            )
-        return {"service": service_name, "request_id": request_id, "cart_id": cart_id, "items": items}
-
-    @app.post("/api/checkout/{cart_id}")
-    def checkout_cart(cart_id: str, payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
-        request_id = resolve_request_id(x_request_id)
-        ensure_service_role(service_name, ["checkout-service", "frontend"], "checkout_cart", logger, request_id)
-
-        if random.random() < 0.08:
-            logger.error(
-                json.dumps(
-                    {
-                        "event": "checkout_dependency_failure",
-                        "request_id": request_id,
-                        "service": service_name,
-                        "cart_id": cart_id,
-                    }
-                )
-            )
-            raise HTTPException(status_code=503, detail="Checkout dependency unavailable")
+            if quote_latency > 500:
+                log_event(logger, "warning", service_name, "/checkout", request_id, "Quote service slow", dependency="quote", latency_ms=quote_latency)
+            quote_resp.raise_for_status()
+            quote_data = quote_resp.json()
+        except Exception as exc:
+            log_event(logger, "error", service_name, "/checkout", request_id, "Quote failed", dependency="quote", error=str(exc))
+            raise HTTPException(status_code=502, detail="Quote unavailable")
 
         order_id = f"ord-{uuid.uuid4().hex[:8]}"
+        try:
+            payment_resp, _ = call_service(
+                payment_url,
+                "POST",
+                "/payment/charge",
+                logger,
+                service_name,
+                request_id,
+                dependency="payment",
+                payload={"amount": quote_data.get("total", 0.0), "paymentMethod": payment_method, "orderId": order_id},
+            )
+            payment_resp.raise_for_status()
+            payment_data = payment_resp.json().get("payment", {})
+        except Exception as exc:
+            log_event(logger, "error", service_name, "/checkout", request_id, "Payment failed due to dependency error", dependency="payment", error=str(exc))
+            raise HTTPException(status_code=502, detail="Payment failed")
+
+        shipping_failed = False
+        shipping_error = ""
+        shipment_data: Dict[str, Any] = {}
+        try:
+            shipping_resp, _ = call_service(
+                shipping_url,
+                "POST",
+                "/shipping/create",
+                logger,
+                service_name,
+                request_id,
+                dependency="shipping",
+                payload={"orderId": order_id},
+            )
+            shipping_resp.raise_for_status()
+            shipment_data = shipping_resp.json().get("shipment", {})
+        except Exception as exc:
+            shipping_failed = True
+            shipping_error = str(exc)
+            log_event(logger, "error", service_name, "/checkout", request_id, "Shipping failed during checkout", dependency="shipping", error=shipping_error)
+
+        email_status = "skipped"
+        try:
+            email_resp, _ = call_service(
+                email_url,
+                "POST",
+                "/email/send",
+                logger,
+                service_name,
+                request_id,
+                dependency="email",
+                payload={"to": email, "template": "order_confirmation", "orderId": order_id},
+            )
+            email_resp.raise_for_status()
+            email_status = "sent"
+        except Exception as exc:
+            log_event(logger, "warning", service_name, "/checkout", request_id, "Email side-effect failed", dependency="email", error=str(exc))
+
         orders_db[order_id] = {
-            "order_id": order_id,
-            "cart_id": cart_id,
-            "email": payload.get("email", "shopper@example.com"),
-            "status": "placed",
-            "created_at": datetime.utcnow().isoformat(),
-        }
-        logger.info(
-            json.dumps(
-                {
-                    "event": "order_placed",
-                    "request_id": request_id,
-                    "service": service_name,
-                    "order_id": order_id,
-                    "cart_id": cart_id,
-                }
-            )
-        )
-
-        return {"service": service_name, "request_id": request_id, "order": orders_db[order_id]}
-
-    @app.post("/api/payments/authorize")
-    def authorize_payment(payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
-        request_id = resolve_request_id(x_request_id)
-        ensure_service_role(service_name, ["payment-service"], "authorize_payment", logger, request_id)
-
-        payment_id = f"pay-{uuid.uuid4().hex[:8]}"
-        amount = float(payload.get("amount", 99.0))
-        if random.random() < 0.15:
-            logger.warning(
-                json.dumps(
-                    {
-                        "event": "payment_declined",
-                        "request_id": request_id,
-                        "service": service_name,
-                        "payment_id": payment_id,
-                        "amount": amount,
-                        "reason": "insufficient_funds",
-                    }
-                )
-            )
-            raise HTTPException(status_code=402, detail="Payment declined")
-
-        payments_db[payment_id] = {"payment_id": payment_id, "amount": amount, "status": "authorized"}
-        return {"service": service_name, "request_id": request_id, "payment": payments_db[payment_id]}
-
-    @app.get("/api/ads/placements")
-    def get_ads(x_request_id: str = Header(default="")):
-        request_id = resolve_request_id(x_request_id)
-        ensure_service_role(service_name, ["ad-service", "frontend"], "get_ads", logger, request_id)
-        if random.random() < 0.05:
-            logger.warning(
-                json.dumps(
-                    {
-                        "event": "ad_engine_degraded",
-                        "request_id": request_id,
-                        "service": service_name,
-                        "fallback": True,
-                    }
-                )
-            )
-
-        return {
-            "service": service_name,
-            "request_id": request_id,
-            "placements": [
-                {"slot": "hero", "campaign_id": "camp-summer-01", "cpc": 1.2},
-                {"slot": "sidebar", "campaign_id": "camp-gadgets-09", "cpc": 0.8},
-            ],
+            "orderId": order_id,
+            "userId": user_id,
+            "total": quote_data.get("total", 0.0),
+            "payment": payment_data,
+            "shipment": shipment_data,
+            "emailStatus": email_status,
+            "status": "partial_failure" if shipping_failed else "completed",
         }
 
-    @app.post("/api/quotes/{cart_id}")
-    def create_quote(cart_id: str, payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
-        request_id = resolve_request_id(x_request_id)
-        ensure_service_role(service_name, ["quote-service"], "create_quote", logger, request_id)
-        destination = payload.get("destination", "US")
-        shipping_cost = round(random.uniform(4.5, 19.0), 2)
-        tax = round(random.uniform(1.5, 7.5), 2)
-        return {
-            "service": service_name,
-            "request_id": request_id,
-            "cart_id": cart_id,
-            "quote": {"shipping": shipping_cost, "tax": tax, "destination": destination, "currency": "USD"},
-        }
+        if shipping_failed:
+            return {
+                "service": service_name,
+                "request_id": request_id,
+                "status": "partial_failure",
+                "order": orders_db[order_id],
+                "error": "shipping_failure",
+                "details": shipping_error,
+            }
 
-    @app.post("/api/shipping/label")
-    def create_shipping_label(payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
-        request_id = resolve_request_id(x_request_id)
-        ensure_service_role(service_name, ["shipping-service"], "create_shipping_label", logger, request_id)
-
-        order_id = payload.get("order_id", "ord-unknown")
-        if random.random() < 0.1:
-            logger.error(
-                json.dumps(
-                    {
-                        "event": "carrier_api_error",
-                        "request_id": request_id,
-                        "service": service_name,
-                        "order_id": order_id,
-                    }
-                )
-            )
-            raise HTTPException(status_code=502, detail="Carrier API error")
-
-        shipment_id = f"shp-{uuid.uuid4().hex[:8]}"
-        shipments_db[shipment_id] = {"shipment_id": shipment_id, "order_id": order_id, "status": "label_created"}
-        return {"service": service_name, "request_id": request_id, "shipment": shipments_db[shipment_id]}
-
-    @app.post("/api/email/send")
-    def send_email(payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
-        request_id = resolve_request_id(x_request_id)
-        ensure_service_role(service_name, ["email-service"], "send_email", logger, request_id)
-        recipient = payload.get("to", "customer@example.com")
-        template = payload.get("template", "order_confirmation")
-
-        if random.random() < 0.07:
-            logger.error(
-                json.dumps(
-                    {
-                        "event": "email_provider_throttled",
-                        "request_id": request_id,
-                        "service": service_name,
-                        "recipient": recipient,
-                    }
-                )
-            )
-            raise HTTPException(status_code=429, detail="Email provider throttled")
-
-        return {
-            "service": service_name,
-            "request_id": request_id,
-            "message_id": f"mail-{uuid.uuid4().hex[:8]}",
-            "recipient": recipient,
-            "template": template,
-            "status": "queued",
-        }
-
-    @app.post("/api/accounting/ledger")
-    def post_ledger_entry(payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
-        request_id = resolve_request_id(x_request_id)
-        ensure_service_role(service_name, ["accounting-service"], "post_ledger_entry", logger, request_id)
-        entry = {
-            "entry_id": f"led-{uuid.uuid4().hex[:8]}",
-            "order_id": payload.get("order_id", "ord-unknown"),
-            "amount": float(payload.get("amount", 0.0)),
-            "currency": payload.get("currency", "USD"),
-            "created_at": datetime.utcnow().isoformat(),
-        }
-        ledger_db.append(entry)
-        logger.info(json.dumps({"event": "ledger_entry_posted", "request_id": request_id, "service": service_name, "entry_id": entry["entry_id"]}))
-        return {"service": service_name, "request_id": request_id, "entry": entry}
+        log_event(logger, "info", service_name, "/checkout", request_id, "Checkout completed successfully", dependency="payment")
+        return {"service": service_name, "request_id": request_id, "status": "success", "order": orders_db[order_id]}
 
     @app.get("/health")
-    def health():
-        logger.info(f"{service_name} health check ok")
+    def health(x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        log_event(logger, "info", service_name, "/health", request_id, "Health check ok")
         return {"status": "ok", "service": service_name, "timestamp": datetime.utcnow().isoformat()}
 
     @app.get("/ready")
-    def ready():
-        """Kubernetes readiness probe - checks if service is ready to accept traffic."""
-        logger.info(f"{service_name} readiness check")
-        return {"ready": True, "service": service_name, "resources_count": len(resources_db)}
+    def ready(x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        log_event(logger, "info", service_name, "/ready", request_id, "Readiness check ok")
+        return {"ready": True, "service": service_name}
 
-    @app.get("/process")
-    def process():
-        logger.info(f"{service_name} processing request")
-        if next_service_url:
+    @app.get("/products")
+    def products(x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+
+        if is_service(service_name, "frontend"):
             try:
-                logger.info(f"Calling downstream service {next_service_url}")
-                resp = requests.get(f"{next_service_url}/process", timeout=5)
-                resp.raise_for_status()
-                return {"status": "success", "service": service_name, "downstream": resp.json()}
-            except Exception as e:
-                logger.error(f"Failed to call downstream service: {e}", exc_info=True)
-                raise HTTPException(status_code=502, detail="Bad Gateway")
-        return {"status": "success", "service": service_name, "message": "processing done"}
+                response, latency_ms = call_service(
+                    product_catalog_url,
+                    "GET",
+                    "/products",
+                    logger,
+                    service_name,
+                    request_id,
+                    dependency="product-catalog",
+                )
+                if latency_ms > 500:
+                    log_event(logger, "warning", service_name, "/products", request_id, "Catalog response slow (>500ms)", dependency="product-catalog", latency_ms=latency_ms)
+                response.raise_for_status()
+                log_event(logger, "info", service_name, "/products", request_id, "Products fetched from catalog", dependency="product-catalog", latency_ms=latency_ms)
+                return response.json()
+            except Exception as exc:
+                log_event(logger, "error", service_name, "/products", request_id, "Failed to fetch products", dependency="product-catalog", error=str(exc))
+                raise HTTPException(status_code=502, detail="Catalog unavailable")
 
-    @app.get("/list")
-    def list_resources():
-        """Get list of all resources."""
-        logger.info(f"{service_name} listing all resources")
+        if is_service(service_name, "product-catalog"):
+            if random.random() < catalog_error_prob:
+                log_event(logger, "error", service_name, "/products", request_id, "DB timeout while fetching products")
+                raise HTTPException(status_code=504, detail="Catalog DB timeout")
+
+            if random.random() < catalog_latency_prob:
+                time.sleep(random.uniform(0.55, 1.1))
+                log_event(logger, "warning", service_name, "/products", request_id, "Slow DB response")
+
+            log_event(logger, "info", service_name, "/products", request_id, "Product list fetched")
+            return {"service": service_name, "products": E_COMMERCE_PRODUCTS}
+
+        raise HTTPException(status_code=404, detail="Endpoint is not exposed by this service")
+
+    @app.post("/cart/add")
+    def cart_add(payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+
+        user_id = payload.get("userId", "user-100")
+        product_id = payload.get("productId", "sku-1001")
+        quantity = int(payload.get("quantity", 1))
+
+        if is_service(service_name, "frontend"):
+            try:
+                response, latency_ms = call_service(
+                    cart_url,
+                    "POST",
+                    "/cart/add",
+                    logger,
+                    service_name,
+                    request_id,
+                    dependency="cart",
+                    payload={"userId": user_id, "productId": product_id, "quantity": quantity},
+                )
+                response.raise_for_status()
+                log_event(logger, "info", service_name, "/cart/add", request_id, "Cart item added successfully", dependency="cart", latency_ms=latency_ms)
+                return response.json()
+            except Exception as exc:
+                log_event(logger, "error", service_name, "/cart/add", request_id, "Cart add failed", dependency="cart", error=str(exc))
+                raise HTTPException(status_code=502, detail="Cart service unavailable")
+
+        if is_service(service_name, "cart"):
+            try:
+                response, latency_ms = call_service(
+                    product_catalog_url,
+                    "GET",
+                    f"/products/{product_id}",
+                    logger,
+                    service_name,
+                    request_id,
+                    dependency="product-catalog",
+                )
+                if latency_ms > 500:
+                    log_event(logger, "warning", service_name, "/cart/add", request_id, "Product service response slow (>500ms)", dependency="product-catalog", latency_ms=latency_ms)
+                response.raise_for_status()
+            except Exception as exc:
+                log_event(logger, "error", service_name, "/cart/add", request_id, "Product unavailable for cart add", dependency="product-catalog", error=str(exc))
+                raise HTTPException(status_code=502, detail="Product unavailable")
+
+            item = {"productId": product_id, "quantity": quantity}
+            carts_db.setdefault(user_id, []).append(item)
+            log_event(logger, "info", service_name, "/cart/add", request_id, "Cart item added successfully", dependency="product-catalog")
+            return {"service": service_name, "userId": user_id, "items": carts_db[user_id]}
+
+        raise HTTPException(status_code=404, detail="Endpoint is not exposed by this service")
+
+    @app.post("/checkout")
+    def checkout(payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+
+        if is_service(service_name, "frontend"):
+            user_id = payload.get("userId", "user-100")
+            payment_method = payload.get("paymentMethod", "card")
+            email = payload.get("email", "buyer@example.com")
+            try:
+                response, latency_ms = call_service(
+                    checkout_url,
+                    "POST",
+                    "/checkout",
+                    logger,
+                    service_name,
+                    request_id,
+                    dependency="checkout",
+                    payload={"userId": user_id, "paymentMethod": payment_method, "email": email},
+                    timeout=12,
+                )
+                if response.status_code >= 500:
+                    log_event(logger, "error", service_name, "/checkout", request_id, "Checkout failed", dependency="checkout", status_code=response.status_code)
+                    raise HTTPException(status_code=502, detail="Checkout failed")
+
+                if response.status_code == 207:
+                    log_event(logger, "warning", service_name, "/checkout", request_id, "Checkout partial failure", dependency="checkout", latency_ms=latency_ms)
+                else:
+                    log_event(logger, "info", service_name, "/checkout", request_id, "Checkout completed", dependency="checkout", latency_ms=latency_ms)
+                return response.json()
+            except HTTPException:
+                raise
+            except Exception as exc:
+                log_event(logger, "error", service_name, "/checkout", request_id, "Checkout call failed", dependency="checkout", error=str(exc))
+                raise HTTPException(status_code=502, detail="Checkout unavailable")
+
+        if is_service(service_name, "checkout"):
+            return execute_checkout(payload, request_id)
+
+        raise HTTPException(status_code=404, detail="Endpoint is not exposed by this service")
+
+    @app.get("/products/{product_id}")
+    def catalog_product(product_id: str, x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        if not is_service(service_name, "product-catalog"):
+            raise HTTPException(status_code=404, detail="Endpoint is only exposed by product-catalog")
+
+        if random.random() < catalog_error_prob:
+            log_event(logger, "error", service_name, f"/products/{product_id}", request_id, "DB timeout while fetching product")
+            raise HTTPException(status_code=504, detail="Catalog DB timeout")
+
+        if random.random() < catalog_latency_prob:
+            time.sleep(random.uniform(0.55, 1.0))
+            log_event(logger, "warning", service_name, f"/products/{product_id}", request_id, "Slow DB response")
+
+        product = next((item for item in E_COMMERCE_PRODUCTS if item["id"] == product_id), None)
+        if not product:
+            log_event(logger, "error", service_name, f"/products/{product_id}", request_id, "Product not found")
+            raise HTTPException(status_code=404, detail="Product not found")
+
+        log_event(logger, "info", service_name, f"/products/{product_id}", request_id, "Product fetched")
+        return {"service": service_name, "product": product}
+
+    @app.get("/cart/{user_id}")
+    def cart_get(user_id: str, x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        if not is_service(service_name, "cart", "checkout"):
+            raise HTTPException(status_code=404, detail="Endpoint is only exposed by cart")
+
+        items = carts_db.get(user_id, [])
+        if not items:
+            log_event(logger, "warning", service_name, f"/cart/{user_id}", request_id, "Cart is empty")
+        else:
+            log_event(logger, "info", service_name, f"/cart/{user_id}", request_id, "Cart fetched")
+        return {"service": service_name, "userId": user_id, "items": items}
+
+    @app.get("/discounts")
+    def discounts(userId: str = "user-100", x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        if not is_service(service_name, "ad-service", "ad"):
+            raise HTTPException(status_code=404, detail="Endpoint is only exposed by ad-service")
+
+        if random.random() < ad_error_prob:
+            log_event(logger, "error", service_name, "/discounts", request_id, "Invalid discount rule", user_id=userId)
+            raise HTTPException(status_code=500, detail="Invalid discount rule")
+
+        if random.random() < ad_delay_prob:
+            time.sleep(random.uniform(0.4, 0.9))
+            log_event(logger, "warning", service_name, "/discounts", request_id, "Discount service delayed", user_id=userId)
+
+        discount_pct = random.choice([0, 5, 10, 15])
+        log_event(logger, "info", service_name, "/discounts", request_id, "Discount rule computed", user_id=userId)
+        return {"service": service_name, "userId": userId, "discountPercent": discount_pct}
+
+    @app.post("/quote")
+    def quote(payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        if not is_service(service_name, "quote"):
+            raise HTTPException(status_code=404, detail="Endpoint is only exposed by quote")
+
+        user_id = payload.get("userId", "user-100")
+        items = payload.get("items", [])
+        subtotal = 0.0
+
+        for item in items:
+            product_id = item.get("productId", "")
+            quantity = int(item.get("quantity", 1))
+            try:
+                response, latency_ms = call_service(
+                    product_catalog_url,
+                    "GET",
+                    f"/products/{product_id}",
+                    logger,
+                    service_name,
+                    request_id,
+                    dependency="product-catalog",
+                )
+                if latency_ms > 500:
+                    log_event(logger, "warning", service_name, "/quote", request_id, "Catalog lookup slow", dependency="product-catalog", latency_ms=latency_ms)
+                response.raise_for_status()
+                subtotal += float(response.json()["product"]["price"]) * quantity
+            except Exception as exc:
+                log_event(logger, "error", service_name, "/quote", request_id, "Failed to fetch product for quote", dependency="product-catalog", error=str(exc))
+                raise HTTPException(status_code=502, detail="Unable to calculate quote")
+
+        try:
+            discount_resp, discount_latency = call_service(
+                ad_service_url,
+                "GET",
+                f"/discounts?userId={user_id}",
+                logger,
+                service_name,
+                request_id,
+                dependency="ad-service",
+            )
+            if discount_latency > 500:
+                log_event(logger, "warning", service_name, "/quote", request_id, "Discount service slow", dependency="ad-service", latency_ms=discount_latency)
+            discount_resp.raise_for_status()
+            discount_pct = float(discount_resp.json().get("discountPercent", 0.0))
+        except Exception as exc:
+            log_event(logger, "warning", service_name, "/quote", request_id, "Discount unavailable, continuing without discount", dependency="ad-service", error=str(exc))
+            discount_pct = 0.0
+
+        discount_amount = round(subtotal * discount_pct / 100.0, 2)
+        total = round(subtotal - discount_amount, 2)
+        if random.random() < quote_mismatch_rate:
+            log_event(logger, "error", service_name, "/quote", request_id, "Price mismatch detected", dependency="ad-service", subtotal=subtotal, discount_percent=discount_pct)
+            raise HTTPException(status_code=500, detail="Price mismatch")
+
+        log_event(logger, "info", service_name, "/quote", request_id, "Price calculated", dependency="ad-service", subtotal=subtotal, discount_percent=discount_pct, total=total)
         return {
-            "status": "success",
             "service": service_name,
-            "count": len(resources_db),
-            "resources": list(resources_db.values()),
-            "timestamp": datetime.utcnow().isoformat()
+            "userId": user_id,
+            "subtotal": round(subtotal, 2),
+            "discountPercent": discount_pct,
+            "discountAmount": discount_amount,
+            "total": total,
+            "currency": "USD",
         }
 
-    @app.get("/get/{resource_id}")
-    def get_resource(resource_id: str):
-        """Get a specific resource by ID."""
-        logger.info(f"{service_name} fetching resource {resource_id}")
-        if resource_id not in resources_db:
-            logger.warning(f"Resource {resource_id} not found in {service_name}")
-            raise HTTPException(status_code=404, detail=f"Resource {resource_id} not found")
-        
-        return {
-            "status": "success",
-            "service": service_name,
-            "resource": resources_db[resource_id]
-        }
+    @app.post("/payment/charge")
+    def payment_charge(payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        if not is_service(service_name, "payment"):
+            raise HTTPException(status_code=404, detail="Endpoint is only exposed by payment")
 
-    @app.post("/create")
-    def create_resource():
-        """Create a new resource."""
-        logger.info(f"{service_name} creating new resource")
-        resource_id = f"res_{int(time.time() * 1000)}"
-        resources_db[resource_id] = {
-            "id": resource_id,
-            "service": service_name,
-            "created_at": datetime.utcnow().isoformat(),
-            "status": "active"
-        }
-        operation_status[resource_id] = {"operation": "create", "status": "completed"}
-        logger.info(f"Created resource {resource_id} in {service_name}")
-        
-        return {
-            "status": "success",
-            "service": service_name,
-            "resource_id": resource_id,
-            "message": "Resource created successfully"
-        }
+        amount = float(payload.get("amount", 0.0))
+        if random.random() < payment_slow_prob:
+            time.sleep(random.uniform(0.45, 0.95))
+            log_event(logger, "warning", service_name, "/payment/charge", request_id, "Slow payment gateway")
 
-    @app.put("/update/{resource_id}")
-    def update_resource(resource_id: str):
-        """Update an existing resource."""
-        logger.info(f"{service_name} updating resource {resource_id}")
-        if resource_id not in resources_db:
-            logger.warning(f"Resource {resource_id} not found for update in {service_name}")
-            raise HTTPException(status_code=404, detail=f"Resource {resource_id} not found")
-        
-        resources_db[resource_id]["updated_at"] = datetime.utcnow().isoformat()
-        resources_db[resource_id]["status"] = "updated"
-        operation_status[resource_id] = {"operation": "update", "status": "completed"}
-        
-        return {
-            "status": "success",
-            "service": service_name,
-            "resource_id": resource_id,
-            "message": "Resource updated successfully"
-        }
+        if random.random() < payment_failure_rate:
+            log_event(logger, "error", service_name, "/payment/charge", request_id, "Payment failed due to gateway timeout")
+            raise HTTPException(status_code=504, detail="Gateway timeout")
 
-    @app.delete("/delete/{resource_id}")
-    def delete_resource(resource_id: str):
-        """Delete a resource."""
-        logger.info(f"{service_name} deleting resource {resource_id}")
-        if resource_id not in resources_db:
-            logger.warning(f"Resource {resource_id} not found for deletion in {service_name}")
-            raise HTTPException(status_code=404, detail=f"Resource {resource_id} not found")
-        
-        deleted_resource = resources_db.pop(resource_id)
-        operation_status[resource_id] = {"operation": "delete", "status": "completed", "timestamp": datetime.utcnow().isoformat()}
-        logger.info(f"Deleted resource {resource_id} from {service_name}")
-        
-        return {
-            "status": "success",
-            "service": service_name,
-            "resource_id": resource_id,
-            "deleted_resource": deleted_resource,
-            "message": "Resource deleted successfully"
-        }
+        payment_id = f"pay-{uuid.uuid4().hex[:8]}"
+        payments_db[payment_id] = {"paymentId": payment_id, "amount": amount, "status": "captured"}
+        log_event(logger, "info", service_name, "/payment/charge", request_id, "Payment success", payment_id=payment_id, amount=amount)
+        return {"service": service_name, "payment": payments_db[payment_id]}
 
-    @app.get("/search")
-    def search_resources(query: str = ""):
-        """Search resources by query."""
-        logger.info(f"{service_name} searching resources with query: {query}")
-        if not query:
-            return {"status": "success", "service": service_name, "results": list(resources_db.values())}
-        
-        # Simple search matching on id
-        results = [r for r in resources_db.values() if query.lower() in r.get("id", "").lower()]
-        logger.info(f"Found {len(results)} results for query '{query}' in {service_name}")
-        
-        return {
-            "status": "success",
-            "service": service_name,
-            "query": query,
-            "result_count": len(results),
-            "results": results
-        }
+    @app.post("/payment/refund")
+    def payment_refund(payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        if not is_service(service_name, "payment"):
+            raise HTTPException(status_code=404, detail="Endpoint is only exposed by payment")
 
-    @app.get("/status/{operation_id}")
-    def get_operation_status(operation_id: str):
-        """Get status of a previously executed operation."""
-        logger.info(f"{service_name} checking status of operation {operation_id}")
-        if operation_id not in operation_status:
-            logger.warning(f"Operation {operation_id} not found in {service_name}")
-            return {
-                "status": "unknown",
-                "service": service_name,
-                "operation_id": operation_id,
-                "message": "Operation not found"
-            }
-        
-        return {
-            "status": "success",
-            "service": service_name,
-            "operation_id": operation_id,
-            "operation_status": operation_status[operation_id]
-        }
+        payment_id = payload.get("paymentId", "")
+        if payment_id not in payments_db:
+            log_event(logger, "error", service_name, "/payment/refund", request_id, "Unknown payment id for refund", payment_id=payment_id)
+            raise HTTPException(status_code=404, detail="Payment not found")
 
-    @app.get("/metrics")
-    def get_metrics():
-        """Get service metrics."""
-        logger.info(f"{service_name} collecting metrics")
-        return {
-            "service": service_name,
-            "timestamp": datetime.utcnow().isoformat(),
-            "metrics": {
-                "total_resources": len(resources_db),
-                "total_operations": len(operation_status),
-                "active_carts": len(carts_db),
-                "orders": len(orders_db),
-                "payments": len(payments_db),
-                "shipments": len(shipments_db),
-                "ledger_entries": len(ledger_db),
-                "uptime_check": True,
-                "memory_healthy": True
-            }
-        }
+        payments_db[payment_id]["status"] = "refunded"
+        log_event(logger, "info", service_name, "/payment/refund", request_id, "Refund successful", payment_id=payment_id)
+        return {"service": service_name, "payment": payments_db[payment_id]}
 
-    @app.get("/sync")
-    def sync_state():
-        """Sync state with downstream services."""
-        logger.info(f"{service_name} syncing state with downstream services")
-        if not sync_services:
-            return {
-                "status": "synced",
-                "service": service_name,
-                "message": "Local state synchronized",
-                "resources_synced": len(resources_db)
-            }
-        
-        responses = call_downstream_service(sync_services, "/sync", logger)
-        
-        return {
-            "status": "synced",
-            "service": service_name,
-            "local_resources": len(resources_db),
-            "downstream_sync": responses
-        }
+    @app.post("/shipping/create")
+    def shipping_create(payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        if not is_service(service_name, "shipping"):
+            raise HTTPException(status_code=404, detail="Endpoint is only exposed by shipping")
 
-    @app.post("/rollback/{operation_id}")
-    def rollback_operation(operation_id: str):
-        """Rollback a previous operation."""
-        logger.info(f"{service_name} rolling back operation {operation_id}")
-        
-        if operation_id not in operation_status:
-            logger.warning(f"Cannot rollback unknown operation {operation_id} in {service_name}")
-            raise HTTPException(status_code=404, detail=f"Operation {operation_id} not found")
-        
-        original_status = operation_status[operation_id]
-        operation_status[operation_id]["status"] = "rolled_back"
-        operation_status[operation_id]["rolled_back_at"] = datetime.utcnow().isoformat()
-        
-        logger.info(f"Successfully rolled back operation {operation_id} in {service_name}")
-        
-        return {
-            "status": "success",
-            "service": service_name,
-            "operation_id": operation_id,
-            "original_status": original_status,
-            "message": "Operation rolled back successfully"
-        }
+        if random.random() < shipping_warning_rate:
+            log_event(logger, "warning", service_name, "/shipping/create", request_id, "Carrier delay observed")
+            time.sleep(random.uniform(0.35, 0.8))
 
-    @app.get("/validate")
-    def validate():
-        """Validate through multiple downstream services (for verification workflows)."""
-        logger.info(f"{service_name} validation request")
-        if not validate_services:
-            return {"status": "validated", "service": service_name, "message": "local validation passed"}
-        
-        responses = call_downstream_service(validate_services, "/validate", logger)
-        all_passed = all(r.get("status") == 200 for r in responses if r.get("status") != "failed")
-        
-        return {
-            "status": "validated" if all_passed else "validation_failed",
-            "service": service_name,
-            "responses": responses
-        }
+        if random.random() < shipping_failure_rate:
+            log_event(logger, "error", service_name, "/shipping/create", request_id, "Carrier unavailable")
+            raise HTTPException(status_code=503, detail="Shipping unavailable")
 
-    @app.get("/fetch-data")
-    def fetch_data():
-        """Fetch aggregated data from multiple downstream services."""
-        logger.info(f"{service_name} fetching aggregated data")
-        if not fetch_services:
-            return {"status": "success", "service": service_name, "data": []}
-        
-        responses = call_downstream_service(fetch_services, "/fetch-data", logger)
-        
-        return {
-            "status": "success",
-            "service": service_name,
-            "aggregated_data": responses
-        }
+        order_id = payload.get("orderId", f"ord-{uuid.uuid4().hex[:8]}")
+        shipment_id = f"shp-{uuid.uuid4().hex[:8]}"
+        shipments_db[order_id] = {"shipmentId": shipment_id, "orderId": order_id, "status": "created"}
+        log_event(logger, "info", service_name, "/shipping/create", request_id, "Shipment created", order_id=order_id, shipment_id=shipment_id)
+        return {"service": service_name, "shipment": shipments_db[order_id]}
 
-    @app.get("/verify")
-    def verify():
-        """Cross-service verification."""
-        logger.info(f"{service_name} performing verification")
-        if not verify_services:
-            return {"status": "verified", "service": service_name, "message": "local verification passed"}
-        
-        responses = call_downstream_service(verify_services, "/verify", logger)
-        
-        return {
-            "status": "verified",
-            "service": service_name,
-            "verification_results": responses
-        }
+    @app.get("/shipping/{order_id}")
+    def shipping_get(order_id: str, x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        if not is_service(service_name, "shipping"):
+            raise HTTPException(status_code=404, detail="Endpoint is only exposed by shipping")
 
-    @app.get("/check")
-    def check():
-        """Check status across multiple downstream services."""
-        logger.info(f"{service_name} performing health check across services")
-        if not check_services:
-            return {"status": "healthy", "service": service_name, "dependencies": []}
-        
-        responses = call_downstream_service(check_services, "/check", logger)
-        
-        return {
-            "status": "healthy",
-            "service": service_name,
-            "dependency_status": responses
-        }
+        shipment = shipments_db.get(order_id)
+        if not shipment:
+            log_event(logger, "warning", service_name, f"/shipping/{order_id}", request_id, "Shipment not found", order_id=order_id)
+            raise HTTPException(status_code=404, detail="Shipment not found")
+        log_event(logger, "info", service_name, f"/shipping/{order_id}", request_id, "Shipment fetched", order_id=order_id)
+        return {"service": service_name, "shipment": shipment}
+
+    @app.post("/email/send")
+    def email_send(payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        if not is_service(service_name, "email"):
+            raise HTTPException(status_code=404, detail="Endpoint is only exposed by email")
+
+        recipient = payload.get("to", "buyer@example.com")
+        if random.random() < email_warning_rate:
+            log_event(logger, "warning", service_name, "/email/send", request_id, "Email delivery delayed", recipient=recipient)
+            time.sleep(random.uniform(0.1, 0.4))
+
+        message_id = f"mail-{uuid.uuid4().hex[:8]}"
+        log_event(logger, "info", service_name, "/email/send", request_id, "Email sent", recipient=recipient, message_id=message_id)
+        return {"service": service_name, "messageId": message_id, "status": "sent"}
 
     @app.get("/warn")
-    def warn():
-        logger.warning(f"This is a warning log from {service_name}. Something might be wrong.")
+    def warn(x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        log_event(logger, "warning", service_name, "/warn", request_id, "Synthetic warning endpoint triggered")
         return {"status": "warning_logged", "service": service_name}
 
     @app.get("/error")
-    def error():
-        logger.error(f"This is a deliberate error log from {service_name}.")
+    def error(x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        log_event(logger, "error", service_name, "/error", request_id, "Synthetic error endpoint triggered")
         raise HTTPException(status_code=500, detail="Internal Server Error triggered")
 
-    @app.get("/simulate-oom")
-    def simulate_oom():
-        try:
-            # Simulate OOM log
-            raise MemoryError("java.lang.OutOfMemoryError: Java heap space")
-        except MemoryError as e:
-            logger.error(f"Out of memory error in {service_name}: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail="Simulated OOM Error")
-
     @app.get("/simulate-cpu")
-    def simulate_cpu():
-        logger.info(f"Simulating CPU load in {service_name}")
+    def simulate_cpu(x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        log_event(logger, "warning", service_name, "/simulate-cpu", request_id, "CPU spike simulation started")
         start = time.time()
         while time.time() - start < 2:
             _ = [i * i for i in range(1000)]
         return {"status": "cpu_load_done", "service": service_name}
 
     @app.get("/delay/{seconds}")
-    def simulate_delay(seconds: int):
-        """Simulate network latency/processing delay."""
-        logger.info(f"Simulating {seconds}s delay in {service_name}")
-        if seconds > 30:
-            logger.warning(f"Requested delay {seconds}s exceeds max (30s) in {service_name}")
-            seconds = 30
-        
-        time.sleep(min(seconds, 30))
-        return {
-            "status": "success",
-            "service": service_name,
-            "delay_simulated_seconds": seconds,
-            "timestamp": datetime.utcnow().isoformat()
-        }
+    def simulate_delay(seconds: int, x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        seconds = min(seconds, 30)
+        time.sleep(seconds)
+        log_event(logger, "warning", service_name, "/delay/{seconds}", request_id, "Latency simulation executed", delay_seconds=seconds)
+        return {"status": "success", "service": service_name, "delay_simulated_seconds": seconds}
 
     return app

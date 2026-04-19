@@ -4,119 +4,98 @@ This repository contains a realistic e-commerce microservice simulator, a load g
 
 ## Architecture
 
-The system consists of the following e-commerce services (all FastAPI services with traces, metrics, and structured logs):
-1.  `frontend`
-2.  `ad-service`
-3.  `product-catalog-service`
-4.  `product-reviews-service`
-5.  `recommendation-service`
-6.  `cart-service`
-7.  `checkout-service`
-8.  `payment-service`
-9.  `shipping-service`
-10. `quote-service`
-11. `email-service`
-12. `accounting-service`
-13. `inventory-service`
+The system consists of the following core e-commerce services (all FastAPI services with structured logs):
+
+1. `frontend`
+2. `product-catalog`
+3. `cart`
+4. `checkout`
+5. `payment`
+6. `shipping`
+7. `email`
+8. `quote`
+9. `ad-service`
 
 **Supporting Services:**
--   **Load Generator**: A Python script continuously generating realistic shopper traffic (browse, cart, checkout, payment, shipping, email, accounting) plus controlled failure patterns.
--   **PostgreSQL**: A simple database provisioned via the Bitnami Helm chart dependency.
--   **Observability Stack**: Prometheus (for RED metrics), Jaeger (for Distributed Traces), and optionally Signoz.
+
+- **Load Generator**: A Python script continuously generating realistic shopper traffic (browse, cart, checkout, payment, shipping, email) plus controlled failure patterns.
+- **PostgreSQL**: A simple database provisioned via the Bitnami Helm chart dependency.
+- **Observability Stack**: Prometheus (for RED metrics), Jaeger (for distributed traces), and optionally Signoz.
 
 ## API Endpoints
 
 Each service exposes the following endpoints (with fault injection built-in):
 
 ### Health & Status Endpoints
--   `/health`: Returns 200 OK with service status and timestamp.
--   `/ready`: Kubernetes readiness probe - checks if service is ready to accept traffic and reports resource count.
 
-### CRUD Operations (Production Resource Management)
--   `/list`: Get list of all resources managed by the service.
--   `/get/{resource_id}`: Get a specific resource by ID.
--   `/create`: Create a new resource with auto-generated ID.
--   `/update/{resource_id}`: Update an existing resource by ID.
--   `/delete/{resource_id}`: Delete a resource by ID.
--   `/search?query=<string>`: Search resources by query string.
+- `/health`: Returns 200 OK with service status and timestamp.
+- `/ready`: Kubernetes readiness probe.
 
-### E-Commerce APIs (Real-World Workflows)
--   `/api/frontend/home`: Aggregates catalog, ads, and recommendations.
--   `/api/products` and `/api/products/{product_id}`: Product catalog browse flows.
--   `/api/reviews/{product_id}`: Product review retrieval.
--   `/api/recommendations/{user_id}`: Recommendation engine output (with occasional model timeout).
--   `/api/cart/{cart_id}/items` (POST): Add item to cart.
--   `/api/cart/{cart_id}`: Retrieve cart state.
--   `/api/checkout/{cart_id}` (POST): Place an order.
--   `/api/payments/authorize` (POST): Payment authorization (with realistic declines).
--   `/api/quotes/{cart_id}` (POST): Shipping and tax quote generation.
--   `/api/shipping/label` (POST): Shipping label creation (with carrier-side failures).
--   `/api/email/send` (POST): Customer notification flow (with provider throttling).
--   `/api/accounting/ledger` (POST): Financial ledger write path.
+### Core E-Commerce APIs (Canonical)
 
-### Multi-Service Orchestration (DAG Pattern)
--   `/process`: Triggers a cascading call down the service chain (original linear pattern).
--   `/validate`: Validates through multiple downstream services configured via `VALIDATE_SERVICES_URL`.
--   `/fetch-data`: Fetches aggregated data from multiple downstream services via `FETCH_SERVICES_URL`.
--   `/verify`: Performs cross-service verification via `VERIFY_SERVICES_URL`.
--   `/check`: Checks health status across multiple downstream services via `CHECK_SERVICES_URL`.
--   `/sync`: Synchronizes state with downstream services configured via `SYNC_SERVICES_URL`.
-
-### Operation & State Management
--   `/status/{operation_id}`: Get status of a previously executed operation.
--   `/rollback/{operation_id}`: Rollback a previous operation (POST request).
--   `/metrics`: Get service metrics including resource counts and health status.
+- `/products` (frontend): product browse entrypoint.
+- `/cart/add` (frontend/cart): add item to cart.
+- `/checkout` (frontend/checkout): orchestrates quote -> payment -> shipping -> email.
+- `/products` and `/products/{id}` (product-catalog): catalog data.
+- `/cart/{userId}` (cart): fetch current cart.
+- `/quote` (quote): compute total with discounts.
+- `/discounts?userId=` (ad-service): discount rules.
+- `/payment/charge`, `/payment/refund` (payment): payment operations.
+- `/shipping/create`, `/shipping/{orderId}` (shipping): shipment operations.
+- `/email/send` (email): notification side-effect.
 
 ### Testing & Fault Injection
--   `/warn`: Logs a warning with trace context.
--   `/error`: Logs a deliberate error and throws a 500 HTTP Exception.
--   `/simulate-oom`: Triggers a Python `MemoryError` and logs an OutOfMemory-like trace.
--   `/simulate-cpu`: Spikes CPU usage for 2 seconds.
--   `/delay/{seconds}`: Simulate network latency by sleeping for N seconds (max 30).
+
+- `/warn`: emits warning log signal.
+- `/error`: emits error log signal.
+- `/simulate-cpu`: spikes CPU usage for 2 seconds.
+- `/delay/{seconds}`: simulates latency.
 
 ### Service Dependency Graph (DAG Pattern)
-```
-                     frontend (entry point)
-                  /      |         \
-                   /       |          \
-            ad-service  product-catalog  recommendation
-               |            |               |
-               |      product-reviews       |
-               |            |               |
-               \------------|---------------/
-                        |
-                      cart-service
-                        |
-                     checkout-service
-                  /      |         \
-               payment   shipping     email
-                |         |           |
-            accounting   quote      accounting
+
+```text
+frontend
+  -> product-catalog
+  -> cart
+  -> checkout
+     -> quote
+        -> ad-service
+     -> payment
+     -> shipping
+     -> email
 ```
 
-**Environment Variables for Multi-Service Routing:**
-Each service can be configured with the following environment variables (comma-separated service URLs):
-- `VALIDATE_SERVICES_URL`: Services to call for `/validate` endpoint
-- `FETCH_SERVICES_URL`: Services to call for `/fetch-data` endpoint
-- `VERIFY_SERVICES_URL`: Services to call for `/verify` endpoint
-- `CHECK_SERVICES_URL`: Services to call for `/check` endpoint
-- `SYNC_SERVICES_URL`: Services to call for `/sync` endpoint
+**Controlled Failure Knobs (Env Vars):**
 
-These are configured in `helm/rca-demo/values.yaml` to represent realistic dependencies for incident correlation and blast-radius analysis.
+- `PAYMENT_FAILURE_RATE` (default `0.15`)
+- `PAYMENT_SLOW_PROB` (default `0.2`)
+- `SHIPPING_FAILURE_RATE` (default `0.1`)
+- `SHIPPING_WARNING_RATE` (default `0.2`)
+- `CATALOG_LATENCY_PROB` (default `0.2`)
+- `CATALOG_ERROR_PROB` (default `0.05`)
+- `AD_DELAY_PROB` (default `0.2`)
+- `AD_ERROR_PROB` (default `0.03`)
+- `QUOTE_MISMATCH_RATE` (default `0.05`)
+- `EMAIL_WARNING_RATE` (default `0.1`)
+
+These are set in `helm/rca-demo/values.yaml` for reproducible RCA test scenarios.
 
 ## Setup Instructions
 
 ### Prerequisites
-1.  Docker
-2.  Kubernetes Cluster (e.g., `minikube` or `kind`)
-3.  Helm
+
+1. Docker
+2. Kubernetes Cluster (for example, `minikube` or `kind`)
+3. Helm
 
 ### 1. (Optional) Build Docker Images Locally
+
 The Helm chart is configured by default to pull the pre-built images from the GitHub Container Registry (`ghcr.io/gaurangkudale/rca-operator-microservice-demo-...`).
 
 If you prefer to build and test them locally, you can do so.
 
 **For Minikube:**
+
 ```bash
 eval $(minikube docker-env)
 
@@ -132,6 +111,7 @@ cd ..
 ```
 
 **For Kind:**
+
 ```bash
 cd src
 docker build -t ghcr.io/gaurangkudale/rca-operator-microservice-demo-app:main .
@@ -145,14 +125,17 @@ kind load docker-image ghcr.io/gaurangkudale/rca-operator-microservice-demo-load
 ```
 
 ### 2. Deploy from GitHub Container Registry (GHCR)
+
 You can directly deploy the packaged Helm chart from the GitHub Container Registry without needing to clone the repository or build the images manually.
 
 1. **Login to Helm Registry (if the repository is private):**
+
    ```bash
    echo "YOUR_GITHUB_PAT" | helm registry login ghcr.io --username YOUR_GITHUB_USERNAME --password-stdin
    ```
 
 2. **Install the Chart:**
+
    ```bash
    helm upgrade --install rca-demo oci://ghcr.io/gaurangkudale/charts/rca-demo-apps \
      --version 0.1.0 \
@@ -163,6 +146,7 @@ You can directly deploy the packaged Helm chart from the GitHub Container Regist
 *(Note: Signoz is disabled by default to save resources. If you want to enable it, append `--set signoz.enabled=true` to the helm command)*
 
 ### 4. Verify the Deployment
+
 Check that all pods are running successfully:
 
 ```bash
@@ -175,19 +159,26 @@ The load generator pod starts hitting the `frontend` and other core services aut
 
 To visualize the traces, metrics, and logs being generated, you can port-forward the respective services to your local machine.
 
-**Access Jaeger UI (Default)**
+#### Access Jaeger UI (Default)
+
 Jaeger is enabled by default to visualize distributed traces. Port-forward the `jaeger-query` service:
+
 ```bash
 kubectl port-forward svc/rca-demo-jaeger-query 16686:80 -n rca-demo
 ```
+
 - Open your browser to: [http://localhost:16686](http://localhost:16686)
 
-**Access Signoz UI (If Enabled)**
+#### Access Signoz UI (If Enabled)
+
 If you installed the chart with `--set signoz.enabled=true`, Signoz provides a unified UI for traces, metrics, and logs. Port-forward the Signoz frontend service:
+
 ```bash
 kubectl port-forward svc/rca-demo-signoz-frontend 3301:3301 -n rca-demo
 ```
+
 - Open your browser to: [http://localhost:3301](http://localhost:3301)
 
 ### 6. Observe Telemetry for RCA-Operator
+
 Because OpenTelemetry and python-json-logger are properly configured, all standard output logs from the pods will be emitted in structured JSON format with `TraceID`, `SpanID`, `Severity`, and `Exception` fields, matching the ingestion patterns required by the RCA-Operator's Correlation Engine.
