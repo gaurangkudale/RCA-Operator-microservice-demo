@@ -24,12 +24,12 @@ spec:
             - containerPort: 8080
           env:
             - name: SERVICE_NAME
-              value: {{ .name }}
+              value: {{ .name | quote }}
             - name: DATABASE_URL
               value: "postgres://postgres:password@{{ $.Release.Name }}-postgresql:5432/rca_demo"
             {{- range .env }}
             - name: {{ .name }}
-              value: {{ .value }}
+              value: {{ .value | quote }}
             {{- end }}
 ---
 apiVersion: v1
