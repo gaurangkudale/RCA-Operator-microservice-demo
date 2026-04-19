@@ -50,6 +50,7 @@ Each service exposes the following endpoints (with fault injection built-in):
 - `/error`: emits error log signal.
 - `/simulate-cpu`: spikes CPU usage for 2 seconds.
 - `/delay/{seconds}`: simulates latency.
+- `/mesh/ping-all`: each service calls every other service's `/health`, `/warn`, and `/error` endpoints.
 
 ### Service Dependency Graph (DAG Pattern)
 
@@ -153,7 +154,7 @@ Check that all pods are running successfully:
 kubectl get pods -n rca-demo
 ```
 
-The load generator pod starts hitting the `frontend` and other core services automatically, generating rich telemetry data with realistic request IDs, warnings, and error bursts.
+The load generator pod now continuously sweeps all endpoints on all services (including `mesh/ping-all` fanout), generating deterministic all-to-all traces plus info/warning/error log bursts.
 
 ### 5. Access the Observability UIs
 

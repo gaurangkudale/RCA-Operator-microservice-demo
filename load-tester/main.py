@@ -4,57 +4,126 @@ import random
 import requests
 import logging
 import uuid
+from itertools import cycle
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 FRONTEND_URL = os.getenv("FRONTEND_URL", os.getenv("TARGET_URL", "http://frontend:8080"))
 
+
+def env_url(name, default):
+    value = os.getenv(name)
+    return value.strip() if value and value.strip() else default
+
+
 SERVICE_URLS = {
-    "frontend": FRONTEND_URL,
-    "cart": os.getenv("CART_URL", "http://cart:8080"),
-    "checkout": os.getenv("CHECKOUT_URL", "http://checkout:8080"),
-    "payment": os.getenv("PAYMENT_URL", "http://payment:8080"),
-    "shipping": os.getenv("SHIPPING_URL", "http://shipping:8080"),
-    "email": os.getenv("EMAIL_URL", "http://email:8080"),
-    "catalog": os.getenv("CATALOG_URL", "http://product-catalog:8080"),
-    "quote": os.getenv("QUOTE_URL", "http://quote:8080"),
-    "ad": os.getenv("AD_URL", "http://ad-service:8080"),
+    "frontend": env_url("FRONTEND_URL", FRONTEND_URL),
+    "product-catalog": env_url("PRODUCT_CATALOG_URL", os.getenv("CATALOG_URL", "http://product-catalog:8080")),
+    "cart": env_url("CART_URL", "http://cart:8080"),
+    "checkout": env_url("CHECKOUT_URL", "http://checkout:8080"),
+    "quote": env_url("QUOTE_URL", "http://quote:8080"),
+    "payment": env_url("PAYMENT_URL", "http://payment:8080"),
+    "shipping": env_url("SHIPPING_URL", "http://shipping:8080"),
+    "email": env_url("EMAIL_URL", "http://email:8080"),
+    "ad-service": env_url("AD_SERVICE_URL", os.getenv("AD_URL", "http://ad-service:8080")),
 }
 
-SCENARIOS = [
-    {"service": "frontend", "method": "GET", "endpoint": "/products", "weight": 0.18},
-    {"service": "frontend", "method": "POST", "endpoint": "/cart/add", "weight": 0.16, "json": {"userId": "user-100", "productId": "sku-1002", "quantity": 1}},
-    {"service": "frontend", "method": "POST", "endpoint": "/checkout", "weight": 0.12, "json": {"userId": "user-100", "paymentMethod": "card", "email": "buyer@example.com"}},
-    {"service": "catalog", "method": "GET", "endpoint": "/products", "weight": 0.07},
-    {"service": "catalog", "method": "GET", "endpoint": "/products/sku-1001", "weight": 0.05},
-    {"service": "cart", "method": "GET", "endpoint": "/cart/user-100", "weight": 0.06},
-    {"service": "quote", "method": "POST", "endpoint": "/quote", "weight": 0.06, "json": {"userId": "user-100", "items": [{"productId": "sku-1002", "quantity": 1}] }},
-    {"service": "payment", "method": "POST", "endpoint": "/payment/charge", "weight": 0.05, "json": {"amount": 149.0}},
-    {"service": "shipping", "method": "POST", "endpoint": "/shipping/create", "weight": 0.05, "json": {"orderId": "ord-test-100"}},
-    {"service": "email", "method": "POST", "endpoint": "/email/send", "weight": 0.03, "json": {"to": "buyer@example.com", "template": "order_confirmation"}},
-    {"service": "ad", "method": "GET", "endpoint": "/discounts?userId=user-100", "weight": 0.03},
-    {"service": "frontend", "method": "GET", "endpoint": "/warn", "weight": 0.04},
-    {"service": "checkout", "method": "GET", "endpoint": "/error", "weight": 0.03},
-    {"service": "payment", "method": "GET", "endpoint": "/simulate-cpu", "weight": 0.03},
-    {"service": "shipping", "method": "GET", "endpoint": "/delay/2", "weight": 0.03},
-    {"service": "frontend", "method": "GET", "endpoint": "/health", "weight": 0.02},
-    {"service": "frontend", "method": "GET", "endpoint": "/ready", "weight": 0.02},
+COMMON_ENDPOINTS = [
+    {"method": "GET", "endpoint": "/health"},
+    {"method": "GET", "endpoint": "/ready"},
+    {"method": "GET", "endpoint": "/warn"},
+    {"method": "GET", "endpoint": "/error"},
+    {"method": "GET", "endpoint": "/simulate-cpu"},
+    {"method": "GET", "endpoint": "/delay/1"},
 ]
 
-def pick_scenario():
-    """Weighted random scenario selection."""
-    rand = random.random()
-    cumulative = 0
-    for scenario in SCENARIOS:
-        cumulative += scenario["weight"]
-        if rand < cumulative:
-            return scenario
-    return SCENARIOS[0]
+SERVICE_SPECIFIC = {
+    "frontend": [
+        {"method": "GET", "endpoint": "/products"},
+        {
+            "method": "POST",
+            "endpoint": "/cart/add",
+            "json": {"userId": "user-100", "productId": "sku-1002", "quantity": 1},
+        },
+        {
+            "method": "POST",
+            "endpoint": "/checkout",
+            "json": {"userId": "user-100", "paymentMethod": "card", "email": "buyer@example.com"},
+        },
+    ],
+    "product-catalog": [
+        {"method": "GET", "endpoint": "/products"},
+        {"method": "GET", "endpoint": "/products/sku-1001"},
+    ],
+    "cart": [
+        {
+            "method": "POST",
+            "endpoint": "/cart/add",
+            "json": {"userId": "user-100", "productId": "sku-1001", "quantity": 1},
+        },
+        {"method": "GET", "endpoint": "/cart/user-100"},
+    ],
+    "checkout": [
+        {
+            "method": "POST",
+            "endpoint": "/checkout",
+            "json": {"userId": "user-100", "paymentMethod": "card", "email": "buyer@example.com"},
+        }
+    ],
+    "quote": [
+        {
+            "method": "POST",
+            "endpoint": "/quote",
+            "json": {"userId": "user-100", "items": [{"productId": "sku-1002", "quantity": 1}]},
+        }
+    ],
+    "payment": [
+        {"method": "POST", "endpoint": "/payment/charge", "json": {"amount": 149.0}},
+        {"method": "POST", "endpoint": "/payment/refund", "json": {"paymentId": "pay-missing"}},
+    ],
+    "shipping": [
+        {"method": "POST", "endpoint": "/shipping/create", "json": {"orderId": "ord-test-100"}},
+        {"method": "GET", "endpoint": "/shipping/ord-test-100"},
+    ],
+    "email": [
+        {
+            "method": "POST",
+            "endpoint": "/email/send",
+            "json": {"to": "buyer@example.com", "template": "order_confirmation"},
+        }
+    ],
+    "ad-service": [
+        {"method": "GET", "endpoint": "/discounts?userId=user-100"},
+    ],
+}
+
+
+def build_scenarios():
+    scenarios = []
+    for service in SERVICE_URLS.keys():
+        for item in COMMON_ENDPOINTS:
+            scenarios.append({"service": service, "method": item["method"], "endpoint": item["endpoint"]})
+
+        for item in SERVICE_SPECIFIC.get(service, []):
+            scenario = {"service": service, "method": item["method"], "endpoint": item["endpoint"]}
+            if "json" in item:
+                scenario["json"] = item["json"]
+            scenarios.append(scenario)
+
+        # Triggers all-to-all calls from each service to every other service.
+        scenarios.append({"service": service, "method": "POST", "endpoint": "/mesh/ping-all"})
+
+    return scenarios
+
+
+SCENARIOS = build_scenarios()
 
 def run_load():
-    """Run continuous load test with random endpoint selection."""
+    """Run continuous all-services endpoint sweeps."""
     call_count = 0
+    scenario_stream = cycle(SCENARIOS)
+
     while True:
-        scenario = pick_scenario()
+        scenario = next(scenario_stream)
         base_url = SERVICE_URLS[scenario["service"]]
         url = f"{base_url}{scenario['endpoint']}"
         method = scenario.get("method", "GET")
@@ -64,21 +133,21 @@ def run_load():
         try:
             resp = requests.request(method=method, url=url, headers=headers, json=scenario.get("json"), timeout=20)
             call_count += 1
-            if call_count % 10 == 0:
-                logging.info(
-                    f"[{call_count}] {method} {url} status={resp.status_code} request_id={request_id}"
-                )
+            if resp.status_code >= 500:
+                logging.error(f"[{call_count}] {method} {url} status={resp.status_code} request_id={request_id}")
+            elif resp.status_code >= 400:
+                logging.warning(f"[{call_count}] {method} {url} status={resp.status_code} request_id={request_id}")
             else:
-                logging.debug(f"{method} {url} status={resp.status_code} request_id={request_id}")
+                logging.info(f"[{call_count}] {method} {url} status={resp.status_code} request_id={request_id}")
         except requests.Timeout:
             logging.warning(f"Timeout calling {method} {url}")
         except Exception as e:
             logging.error(f"Failed to call {method} {url}: {e}")
         
-        # Random delay between requests
-        time.sleep(random.uniform(0.3, 1.5))
+        # Keep traffic bursty but bounded to avoid overloading the cluster.
+        time.sleep(random.uniform(0.15, 0.45))
 
 if __name__ == "__main__":
     logging.info(f"Starting load generator with frontend target {FRONTEND_URL}")
-    logging.info(f"Loaded {len(SCENARIOS)} realistic e-commerce scenarios")
+    logging.info(f"Loaded {len(SCENARIOS)} all-services endpoint scenarios")
     run_load()

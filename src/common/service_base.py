@@ -38,6 +38,11 @@ def canonical_service(name: str) -> str:
     return name
 
 
+def env_url(name: str, default: str) -> str:
+    value = os.getenv(name)
+    return value.strip() if value and value.strip() else default
+
+
 def is_service(service_name: str, *allowed: str) -> bool:
     candidate = canonical_service(service_name)
     return candidate in {canonical_service(s) for s in allowed}
@@ -95,6 +100,19 @@ def create_app(service_name: str):
     shipping_url = os.getenv("SHIPPING_URL", "")
     email_url = os.getenv("EMAIL_URL", "")
     ad_service_url = os.getenv("AD_SERVICE_URL", "")
+
+    # Keep defaults aligned with in-cluster service DNS names for all deployments.
+    service_urls = {
+        "frontend": env_url("FRONTEND_URL", "http://frontend:8080"),
+        "product-catalog": env_url("PRODUCT_CATALOG_URL", "http://product-catalog:8080"),
+        "cart": env_url("CART_URL", "http://cart:8080"),
+        "checkout": env_url("CHECKOUT_URL", "http://checkout:8080"),
+        "quote": env_url("QUOTE_URL", "http://quote:8080"),
+        "payment": env_url("PAYMENT_URL", "http://payment:8080"),
+        "shipping": env_url("SHIPPING_URL", "http://shipping:8080"),
+        "email": env_url("EMAIL_URL", "http://email:8080"),
+        "ad-service": env_url("AD_SERVICE_URL", "http://ad-service:8080"),
+    }
 
     payment_failure_rate = env_float("PAYMENT_FAILURE_RATE", 0.15)
     payment_slow_prob = env_float("PAYMENT_SLOW_PROB", 0.2)
@@ -604,5 +622,85 @@ def create_app(service_name: str):
         time.sleep(seconds)
         log_event(logger, "warning", service_name, "/delay/{seconds}", request_id, "Latency simulation executed", delay_seconds=seconds)
         return {"status": "success", "service": service_name, "delay_simulated_seconds": seconds}
+
+    @app.post("/mesh/ping-all")
+    def mesh_ping_all(x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        caller = canonical_service(service_name)
+        outcomes = []
+
+        for target, base_url in service_urls.items():
+            if canonical_service(target) == caller:
+                continue
+
+            for endpoint in ("/health", "/warn", "/error"):
+                status_code: Optional[int] = None
+                level = "info"
+                message = "Dependency endpoint call completed"
+                error_text = ""
+
+                try:
+                    response, latency_ms = call_service(
+                        base_url,
+                        "GET",
+                        endpoint,
+                        logger,
+                        service_name,
+                        request_id,
+                        dependency=target,
+                        timeout=6,
+                    )
+                    status_code = response.status_code
+                    if endpoint == "/error" and status_code >= 500:
+                        level = "warning"
+                        message = "Synthetic dependency error observed as expected"
+                    elif status_code >= 400:
+                        level = "warning"
+                        message = "Dependency endpoint returned non-success status"
+
+                    log_event(
+                        logger,
+                        level,
+                        service_name,
+                        "/mesh/ping-all",
+                        request_id,
+                        message,
+                        dependency=target,
+                        target_endpoint=endpoint,
+                        status_code=status_code,
+                        latency_ms=latency_ms,
+                    )
+                except Exception as exc:
+                    level = "error"
+                    message = "Dependency endpoint call failed"
+                    error_text = str(exc)
+                    log_event(
+                        logger,
+                        level,
+                        service_name,
+                        "/mesh/ping-all",
+                        request_id,
+                        message,
+                        dependency=target,
+                        target_endpoint=endpoint,
+                        error=error_text,
+                    )
+
+                outcomes.append(
+                    {
+                        "target": target,
+                        "endpoint": endpoint,
+                        "status_code": status_code,
+                        "level": level,
+                        "error": error_text,
+                    }
+                )
+
+        return {
+            "service": service_name,
+            "request_id": request_id,
+            "fanout_calls": len(outcomes),
+            "outcomes": outcomes,
+        }
 
     return app
