@@ -4,7 +4,7 @@ This repository contains a realistic e-commerce microservice simulator, a load g
 
 ## Architecture
 
-The system consists of the following core e-commerce services (all FastAPI services with structured logs):
+The system consists of the following core e-commerce services (all FastAPI services with structured logs and production resilience patterns):
 
 1. `frontend`
 2. `product-catalog`
@@ -16,9 +16,20 @@ The system consists of the following core e-commerce services (all FastAPI servi
 8. `quote`
 9. `ad-service`
 
+**Production-Ready Features:**
+
+All services include:
+- **Resilient HTTP sessions** with connection pooling
+- **Retry logic** with exponential backoff and jitter
+- **Circuit breaker pattern** to prevent cascading failures
+- **Bulkhead pattern** to limit concurrent calls per dependency
+- **Dependency health monitoring** exposed via `/dependencies/health`
+- **Graceful degradation** for non-critical side-effects (e.g., email)
+- **Request tracing** with unique request IDs across all calls
+
 **Supporting Services:**
 
-- **Load Generator**: A Python script continuously generating realistic shopper traffic (browse, cart, checkout, payment, shipping, email) plus controlled failure patterns.
+- **Load Generator**: A Python script continuously generating realistic multi-step workflows (browse→cart→checkout) plus health checks, chaos injection, and mesh fanout probes.
 - **PostgreSQL**: A simple database provisioned via the Bitnami Helm chart dependency.
 - **Observability Stack**: Prometheus (for RED metrics), Jaeger (for distributed traces), and optionally Signoz.
 
@@ -30,6 +41,7 @@ Each service exposes the following endpoints (with fault injection built-in):
 
 - `/health`: Returns 200 OK with service status and timestamp.
 - `/ready`: Kubernetes readiness probe.
+- `/dependencies/health`: Circuit breaker state and dependency health (production-ready).
 
 ### Core E-Commerce APIs (Canonical)
 
@@ -154,7 +166,22 @@ Check that all pods are running successfully:
 kubectl get pods -n rca-demo
 ```
 
-The load generator pod now continuously sweeps all endpoints on all services (including `mesh/ping-all` fanout), generating deterministic all-to-all traces plus info/warning/error log bursts.
+The load generator pod now runs production-ready traffic patterns:
+
+**Traffic Distribution (per cycle):**
+- **60% Realistic Workflows**: Multi-step e-commerce scenarios (browse → cart → checkout, etc.) that naturally trigger cross-service dependency chains.
+- **20% Health Checks**: Service health and readiness probes with dependency monitoring.
+- **10% Fault Injection**: Synthetic errors and latency for chaos testing and observability validation.
+- **10% Mesh Fanout**: Each service calls every other service via `/mesh/ping-all` endpoint, generating dense distributed traces.
+
+**Workflows include:**
+- Browse products → Add to cart → Checkout (full transaction with payment, shipping, email)
+- Catalog browsing with discount rule queries
+- Quote calculation triggering product lookups
+- Payment + shipping coordination
+- Multi-user concurrent shopping
+
+All traffic carries unique request IDs for tracing through the entire call chain, and generates info/warning/error logs based on response status codes.
 
 ### 5. Access the Observability UIs
 

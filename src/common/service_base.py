@@ -5,9 +5,11 @@ import time
 import json
 import random
 import uuid
+import threading
 from datetime import datetime
 from typing import Any, Dict, Optional
 from common.logging_setup import setup_logging
+from common.production_utils import ResilientHTTPSession
 
 
 E_COMMERCE_PRODUCTS = [
@@ -87,6 +89,12 @@ def create_app(service_name: str):
     app = FastAPI(title=service_name)
     logger = setup_logging(service_name)
 
+    # Production-ready HTTP session with resilience patterns
+    http_session = ResilientHTTPSession(service_name, logger)
+
+    # Dependency health status
+    dependency_health: Dict[str, Dict[str, Any]] = {}
+
     carts_db: Dict[str, list] = {}
     orders_db: Dict[str, Dict[str, Any]] = {}
     payments_db: Dict[str, Dict[str, Any]] = {}
@@ -125,107 +133,126 @@ def create_app(service_name: str):
     quote_mismatch_rate = env_float("QUOTE_MISMATCH_RATE", 0.05)
     email_warning_rate = env_float("EMAIL_WARNING_RATE", 0.1)
 
+    def call_service_resilient(
+        base_url: str,
+        method: str,
+        endpoint: str,
+        request_id: str,
+        dependency: str,
+        payload: Optional[Dict[str, Any]] = None,
+        timeout: int = 6,
+    ) -> tuple:
+        """Call a service with resilience patterns (retry, circuit breaker, bulkhead)."""
+        return http_session.call_service_resilient(
+            base_url=base_url,
+            method=method,
+            endpoint=endpoint,
+            request_id=request_id,
+            dependency=dependency,
+            payload=payload,
+            timeout=timeout,
+            on_log=log_event,
+        )
+
     def execute_checkout(payload: Dict[str, Any], request_id: str):
         user_id = payload.get("userId", "user-100")
         payment_method = payload.get("paymentMethod", "card")
         email = payload.get("email", "buyer@example.com")
 
+        # Fetch cart with resilience
         try:
-            cart_resp, cart_latency = call_service(
-                cart_url,
-                "GET",
-                f"/cart/{user_id}",
-                logger,
-                service_name,
-                request_id,
-                dependency="cart",
+            response, latency_ms, success, reason = call_service_resilient(
+                cart_url, "GET", f"/cart/{user_id}", request_id, "cart"
             )
-            cart_resp.raise_for_status()
-            items = cart_resp.json().get("items", [])
+            if not success or not response:
+                log_event(logger, "error", service_name, "/checkout", request_id, f"Failed to fetch cart: {reason}", dependency="cart")
+                raise HTTPException(status_code=502, detail="Cart unavailable")
+            items = response.json().get("items", [])
             if not items:
                 log_event(logger, "warning", service_name, "/checkout", request_id, "Checkout requested with empty cart", dependency="cart")
                 raise HTTPException(status_code=400, detail="Cart is empty")
-            log_event(logger, "info", service_name, "/checkout", request_id, "Cart loaded", dependency="cart", latency_ms=cart_latency)
+            log_event(logger, "info", service_name, "/checkout", request_id, "Cart loaded", dependency="cart", latency_ms=latency_ms)
         except HTTPException:
             raise
         except Exception as exc:
-            log_event(logger, "error", service_name, "/checkout", request_id, "Failed to fetch cart", dependency="cart", error=str(exc))
+            log_event(logger, "error", service_name, "/checkout", request_id, "Cart fetch exception", dependency="cart", error=str(exc))
             raise HTTPException(status_code=502, detail="Cart unavailable")
 
+        # Fetch quote with resilience
         try:
-            quote_resp, quote_latency = call_service(
-                quote_url,
-                "POST",
-                "/quote",
-                logger,
-                service_name,
-                request_id,
-                dependency="quote",
-                payload={"userId": user_id, "items": items},
+            response, latency_ms, success, reason = call_service_resilient(
+                quote_url, "POST", "/quote", request_id, "quote", payload={"userId": user_id, "items": items}
             )
-            if quote_latency > 500:
-                log_event(logger, "warning", service_name, "/checkout", request_id, "Quote service slow", dependency="quote", latency_ms=quote_latency)
-            quote_resp.raise_for_status()
-            quote_data = quote_resp.json()
+            if not success or not response:
+                log_event(logger, "error", service_name, "/checkout", request_id, f"Quote failed: {reason}", dependency="quote")
+                raise HTTPException(status_code=502, detail="Quote unavailable")
+            if latency_ms > 500:
+                log_event(logger, "warning", service_name, "/checkout", request_id, "Quote service slow", dependency="quote", latency_ms=latency_ms)
+            quote_data = response.json()
+        except HTTPException:
+            raise
         except Exception as exc:
-            log_event(logger, "error", service_name, "/checkout", request_id, "Quote failed", dependency="quote", error=str(exc))
+            log_event(logger, "error", service_name, "/checkout", request_id, "Quote exception", dependency="quote", error=str(exc))
             raise HTTPException(status_code=502, detail="Quote unavailable")
 
         order_id = f"ord-{uuid.uuid4().hex[:8]}"
+
+        # Process payment with resilience
         try:
-            payment_resp, _ = call_service(
+            response, latency_ms, success, reason = call_service_resilient(
                 payment_url,
                 "POST",
                 "/payment/charge",
-                logger,
-                service_name,
                 request_id,
-                dependency="payment",
+                "payment",
                 payload={"amount": quote_data.get("total", 0.0), "paymentMethod": payment_method, "orderId": order_id},
             )
-            payment_resp.raise_for_status()
-            payment_data = payment_resp.json().get("payment", {})
+            if not success or not response:
+                log_event(logger, "error", service_name, "/checkout", request_id, f"Payment failed: {reason}", dependency="payment")
+                raise HTTPException(status_code=502, detail="Payment failed")
+            payment_data = response.json().get("payment", {})
+        except HTTPException:
+            raise
         except Exception as exc:
-            log_event(logger, "error", service_name, "/checkout", request_id, "Payment failed due to dependency error", dependency="payment", error=str(exc))
+            log_event(logger, "error", service_name, "/checkout", request_id, "Payment exception", dependency="payment", error=str(exc))
             raise HTTPException(status_code=502, detail="Payment failed")
 
+        # Process shipping with resilience and graceful degradation
         shipping_failed = False
         shipping_error = ""
         shipment_data: Dict[str, Any] = {}
         try:
-            shipping_resp, _ = call_service(
-                shipping_url,
-                "POST",
-                "/shipping/create",
-                logger,
-                service_name,
-                request_id,
-                dependency="shipping",
-                payload={"orderId": order_id},
+            response, latency_ms, success, reason = call_service_resilient(
+                shipping_url, "POST", "/shipping/create", request_id, "shipping", payload={"orderId": order_id}
             )
-            shipping_resp.raise_for_status()
-            shipment_data = shipping_resp.json().get("shipment", {})
+            if success and response:
+                shipment_data = response.json().get("shipment", {})
+            else:
+                shipping_failed = True
+                shipping_error = reason
+                log_event(logger, "error", service_name, "/checkout", request_id, f"Shipping failed (graceful degradation): {reason}", dependency="shipping")
         except Exception as exc:
             shipping_failed = True
             shipping_error = str(exc)
-            log_event(logger, "error", service_name, "/checkout", request_id, "Shipping failed during checkout", dependency="shipping", error=shipping_error)
+            log_event(logger, "error", service_name, "/checkout", request_id, "Shipping exception (graceful degradation)", dependency="shipping", error=shipping_error)
 
+        # Send email with resilience (non-critical side-effect)
         email_status = "skipped"
         try:
-            email_resp, _ = call_service(
+            response, latency_ms, success, reason = call_service_resilient(
                 email_url,
                 "POST",
                 "/email/send",
-                logger,
-                service_name,
                 request_id,
-                dependency="email",
+                "email",
                 payload={"to": email, "template": "order_confirmation", "orderId": order_id},
             )
-            email_resp.raise_for_status()
-            email_status = "sent"
+            if success and response:
+                email_status = "sent"
+            else:
+                log_event(logger, "warning", service_name, "/checkout", request_id, f"Email side-effect failed: {reason}", dependency="email")
         except Exception as exc:
-            log_event(logger, "warning", service_name, "/checkout", request_id, "Email side-effect failed", dependency="email", error=str(exc))
+            log_event(logger, "warning", service_name, "/checkout", request_id, "Email exception (non-critical)", dependency="email", error=str(exc))
 
         orders_db[order_id] = {
             "orderId": order_id,
@@ -247,7 +274,7 @@ def create_app(service_name: str):
                 "details": shipping_error,
             }
 
-        log_event(logger, "info", service_name, "/checkout", request_id, "Checkout completed successfully", dependency="payment")
+        log_event(logger, "info", service_name, "/checkout", request_id, "Checkout completed successfully")
         return {"service": service_name, "request_id": request_id, "status": "success", "order": orders_db[order_id]}
 
     @app.get("/health")
@@ -623,6 +650,18 @@ def create_app(service_name: str):
         log_event(logger, "warning", service_name, "/delay/{seconds}", request_id, "Latency simulation executed", delay_seconds=seconds)
         return {"status": "success", "service": service_name, "delay_simulated_seconds": seconds}
 
+    @app.get("/dependencies/health")
+    def dependencies_health(x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        health_status = http_session.get_health_status()
+        log_event(logger, "info", service_name, "/dependencies/health", request_id, "Dependency health queried", num_dependencies=len(health_status))
+        return {
+            "service": service_name,
+            "request_id": request_id,
+            "dependencies": health_status,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
     @app.post("/mesh/ping-all")
     def mesh_ping_all(x_request_id: str = Header(default="")):
         request_id = resolve_request_id(x_request_id)
@@ -634,65 +673,30 @@ def create_app(service_name: str):
                 continue
 
             for endpoint in ("/health", "/warn", "/error"):
-                status_code: Optional[int] = None
-                level = "info"
-                message = "Dependency endpoint call completed"
-                error_text = ""
+                response, latency_ms, success, reason = call_service_resilient(
+                    base_url=base_url,
+                    method="GET",
+                    endpoint=endpoint,
+                    request_id=request_id,
+                    dependency=target,
+                    timeout=6,
+                )
 
-                try:
-                    response, latency_ms = call_service(
-                        base_url,
-                        "GET",
-                        endpoint,
-                        logger,
-                        service_name,
-                        request_id,
-                        dependency=target,
-                        timeout=6,
-                    )
-                    status_code = response.status_code
-                    if endpoint == "/error" and status_code >= 500:
-                        level = "warning"
-                        message = "Synthetic dependency error observed as expected"
-                    elif status_code >= 400:
-                        level = "warning"
-                        message = "Dependency endpoint returned non-success status"
+                level = "info" if success else "warning"
+                if endpoint == "/error":
+                    level = "warning"  # Expected to fail
 
-                    log_event(
-                        logger,
-                        level,
-                        service_name,
-                        "/mesh/ping-all",
-                        request_id,
-                        message,
-                        dependency=target,
-                        target_endpoint=endpoint,
-                        status_code=status_code,
-                        latency_ms=latency_ms,
-                    )
-                except Exception as exc:
+                if response and response.status_code >= 500:
                     level = "error"
-                    message = "Dependency endpoint call failed"
-                    error_text = str(exc)
-                    log_event(
-                        logger,
-                        level,
-                        service_name,
-                        "/mesh/ping-all",
-                        request_id,
-                        message,
-                        dependency=target,
-                        target_endpoint=endpoint,
-                        error=error_text,
-                    )
 
                 outcomes.append(
                     {
                         "target": target,
                         "endpoint": endpoint,
-                        "status_code": status_code,
-                        "level": level,
-                        "error": error_text,
+                        "status_code": response.status_code if response else None,
+                        "success": success,
+                        "reason": reason,
+                        "latency_ms": latency_ms,
                     }
                 )
 
