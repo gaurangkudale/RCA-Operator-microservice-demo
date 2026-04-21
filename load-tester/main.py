@@ -91,13 +91,25 @@ def run_load():
     fault_cycle = cycle(FAULT_ENDPOINTS)
     mesh_cycle = cycle(MESH_ENDPOINTS)
 
-    # Distribute traffic: 60% workflows, 20% health, 10% faults, 10% mesh
-    distribution = (
-        ["workflow"] * 12 +
-        ["health"] * 4 +
-        ["fault"] * 2 +
-        ["mesh"] * 2
-    )
+    # Distribute traffic: 70% workflows, 20% health, 10% mesh.
+    # Fault endpoints (/error, /warn, /simulate-cpu, /delay) are removed from
+    # the steady-state mix so the demo is clean by default — errors only come
+    # from the chaos-runner Job, which flips failure knobs per scenario.
+    # Set LOAD_TESTER_INCLUDE_FAULTS=true to bring them back for ad-hoc chaos.
+    include_faults = os.getenv("LOAD_TESTER_INCLUDE_FAULTS", "false").lower() == "true"
+    if include_faults:
+        distribution = (
+            ["workflow"] * 12 +
+            ["health"] * 4 +
+            ["fault"] * 2 +
+            ["mesh"] * 2
+        )
+    else:
+        distribution = (
+            ["workflow"] * 14 +
+            ["health"] * 4 +
+            ["mesh"] * 2
+        )
     distribution_cycle = cycle(distribution)
 
     while True:

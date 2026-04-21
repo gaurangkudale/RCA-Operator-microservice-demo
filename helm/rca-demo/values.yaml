@@ -18,19 +18,23 @@ services:
       - name: CHECKOUT_URL
         value: "http://checkout:8080"
 
+  # Baseline failure probabilities are all zero so services run clean in
+  # steady state. The chaos-runner Job is the only source of injected faults;
+  # it flips these knobs via POST /chaos/config per scenario and calls
+  # /chaos/reset afterwards, restoring the healthy baseline.
   - name: ad-service
     env:
       - name: AD_DELAY_PROB
-        value: "0.2"
+        value: "0"
       - name: AD_ERROR_PROB
-        value: "0.03"
+        value: "0"
 
   - name: product-catalog
     env:
       - name: CATALOG_LATENCY_PROB
-        value: "0.2"
+        value: "0"
       - name: CATALOG_ERROR_PROB
-        value: "0.05"
+        value: "0"
 
   - name: cart
     env:
@@ -44,26 +48,26 @@ services:
       - name: AD_SERVICE_URL
         value: "http://ad-service:8080"
       - name: QUOTE_MISMATCH_RATE
-        value: "0.05"
+        value: "0"
 
   - name: payment
     env:
       - name: PAYMENT_FAILURE_RATE
-        value: "0.15"
+        value: "0"
       - name: PAYMENT_SLOW_PROB
-        value: "0.2"
+        value: "0"
 
   - name: shipping
     env:
       - name: SHIPPING_FAILURE_RATE
-        value: "0.1"
+        value: "0"
       - name: SHIPPING_WARNING_RATE
-        value: "0.2"
+        value: "0"
 
   - name: email
     env:
       - name: EMAIL_WARNING_RATE
-        value: "0.1"
+        value: "0"
 
   - name: checkout
     env:

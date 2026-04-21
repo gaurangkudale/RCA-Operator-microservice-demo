@@ -679,16 +679,22 @@ def create_app(service_name: str):
         }
 
     @app.post("/mesh/ping-all")
-    def mesh_ping_all(x_request_id: str = Header(default="")):
+    def mesh_ping_all(payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
         request_id = resolve_request_id(x_request_id)
         caller = canonical_service(service_name)
         outcomes = []
+
+        # Default fanout hits only /health so healthy traffic stays clean.
+        # Pass {"endpoints": ["/health", "/warn", "/error"]} explicitly to
+        # opt into the noisy fault-injection endpoints (chaos-runner use only).
+        requested = payload.get("endpoints") if isinstance(payload, dict) else None
+        fanout_endpoints = tuple(requested) if requested else ("/health",)
 
         for target, base_url in service_urls.items():
             if canonical_service(target) == caller:
                 continue
 
-            for endpoint in ("/health", "/warn", "/error"):
+            for endpoint in fanout_endpoints:
                 response, latency_ms, success, reason = call_service_resilient(
                     base_url=base_url,
                     method="GET",
@@ -699,10 +705,9 @@ def create_app(service_name: str):
                 )
 
                 level = "info" if success else "warning"
-                if endpoint == "/error":
-                    level = "warning"  # Expected to fail
-
-                if response and response.status_code >= 500:
+                if endpoint in ("/error", "/warn"):
+                    level = "warning"  # Expected to fail — fault-injection endpoints
+                elif response and response.status_code >= 500:
                     level = "error"
 
                 outcomes.append(
