@@ -80,18 +80,18 @@ frontend
 
 **Controlled Failure Knobs (Env Vars):**
 
-- `PAYMENT_FAILURE_RATE` (default `0.15`)
-- `PAYMENT_SLOW_PROB` (default `0.2`)
-- `SHIPPING_FAILURE_RATE` (default `0.1`)
-- `SHIPPING_WARNING_RATE` (default `0.2`)
-- `CATALOG_LATENCY_PROB` (default `0.2`)
-- `CATALOG_ERROR_PROB` (default `0.05`)
-- `AD_DELAY_PROB` (default `0.2`)
-- `AD_ERROR_PROB` (default `0.03`)
-- `QUOTE_MISMATCH_RATE` (default `0.05`)
-- `EMAIL_WARNING_RATE` (default `0.1`)
+- `PAYMENT_FAILURE_RATE` (default `0.0`)
+- `PAYMENT_SLOW_PROB` (default `0.0`)
+- `SHIPPING_FAILURE_RATE` (default `0.0`)
+- `SHIPPING_WARNING_RATE` (default `0.0`)
+- `CATALOG_LATENCY_PROB` (default `0.0`)
+- `CATALOG_ERROR_PROB` (default `0.0`)
+- `AD_DELAY_PROB` (default `0.0`)
+- `AD_ERROR_PROB` (default `0.0`)
+- `QUOTE_MISMATCH_RATE` (default `0.0`)
+- `EMAIL_WARNING_RATE` (default `0.0`)
 
-These are set in `helm/rca-demo/values.yaml` for reproducible RCA test scenarios.
+These are set in `helm/rca-demo/values.yaml` to keep baseline traffic healthy. For reproducible RCA tests, the chaos runner flips them at runtime via `POST /chaos/config` and restores baseline with `POST /chaos/reset`.
 
 ## Setup Instructions
 
@@ -169,10 +169,11 @@ kubectl get pods -n rca-demo
 The load generator pod now runs production-ready traffic patterns:
 
 **Traffic Distribution (per cycle):**
-- **60% Realistic Workflows**: Multi-step e-commerce scenarios (browse → cart → checkout, etc.) that naturally trigger cross-service dependency chains.
+- **70% Realistic Workflows**: Multi-step e-commerce scenarios (browse → cart → checkout, etc.) that naturally trigger cross-service dependency chains.
 - **20% Health Checks**: Service health and readiness probes with dependency monitoring.
-- **10% Fault Injection**: Synthetic errors and latency for chaos testing and observability validation.
 - **10% Mesh Fanout**: Each service calls every other service via `/mesh/ping-all` endpoint, generating dense distributed traces.
+
+Fault endpoint traffic is disabled by default. Set `LOAD_TESTER_INCLUDE_FAULTS=true` on the load tester only if you want ad-hoc synthetic chaos outside the chaos-runner Job.
 
 **Workflows include:**
 - Browse products → Add to cart → Checkout (full transaction with payment, shipping, email)

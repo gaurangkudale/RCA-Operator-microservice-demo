@@ -138,16 +138,18 @@ def create_app(service_name: str):
         "ad-service": env_url("AD_SERVICE_URL", "http://ad-service:8080"),
     }
 
-    payment_failure_rate = env_float("PAYMENT_FAILURE_RATE", 0.15)
-    payment_slow_prob = env_float("PAYMENT_SLOW_PROB", 0.2)
-    shipping_failure_rate = env_float("SHIPPING_FAILURE_RATE", 0.1)
-    shipping_warning_rate = env_float("SHIPPING_WARNING_RATE", 0.2)
-    catalog_latency_prob = env_float("CATALOG_LATENCY_PROB", 0.2)
-    catalog_error_prob = env_float("CATALOG_ERROR_PROB", 0.05)
-    ad_delay_prob = env_float("AD_DELAY_PROB", 0.2)
-    ad_error_prob = env_float("AD_ERROR_PROB", 0.03)
-    quote_mismatch_rate = env_float("QUOTE_MISMATCH_RATE", 0.05)
-    email_warning_rate = env_float("EMAIL_WARNING_RATE", 0.1)
+    # Keep service behavior healthy by default; chaos-runner injects faults
+    # at runtime via /chaos/config overrides when scenarios are executed.
+    payment_failure_rate = env_float("PAYMENT_FAILURE_RATE", 0.0)
+    payment_slow_prob = env_float("PAYMENT_SLOW_PROB", 0.0)
+    shipping_failure_rate = env_float("SHIPPING_FAILURE_RATE", 0.0)
+    shipping_warning_rate = env_float("SHIPPING_WARNING_RATE", 0.0)
+    catalog_latency_prob = env_float("CATALOG_LATENCY_PROB", 0.0)
+    catalog_error_prob = env_float("CATALOG_ERROR_PROB", 0.0)
+    ad_delay_prob = env_float("AD_DELAY_PROB", 0.0)
+    ad_error_prob = env_float("AD_ERROR_PROB", 0.0)
+    quote_mismatch_rate = env_float("QUOTE_MISMATCH_RATE", 0.0)
+    email_warning_rate = env_float("EMAIL_WARNING_RATE", 0.0)
 
     def call_service_resilient(
         base_url: str,
