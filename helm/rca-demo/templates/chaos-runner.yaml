@@ -37,11 +37,18 @@ roleRef:
   kind: Role
   name: chaos-runner
 ---
-# One-shot Job. Re-run with:
+# Plain (non-hook) Job. Kept out of Helm hooks so it doesn't block `helm
+# install` on a long chaos run and so the Job object (and its logs) remain
+# visible after completion.
+#
+# Re-run with:
 #   kubectl -n rca-demo delete job chaos-runner --ignore-not-found
-#   helm upgrade rca-demo ./helm/rca-demo -n rca-demo
-# Or on demand:
-#   kubectl -n rca-demo create job chaos-runner-$(date +%s) --from=cronjob/chaos-runner  # if cron
+#   helm upgrade rca-demo ./helm/rca-demo -n rca-demo \
+#     --set chaosRunner.enabled=true \
+#     --set chaosRunner.runId=$(date +%s)
+#
+# The runId is folded into a pod-template annotation so `helm upgrade` always
+# produces a new Job generation even when only the run identifier changes.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -49,10 +56,6 @@ metadata:
   labels:
     app.kubernetes.io/component: chaos-runner
     app.kubernetes.io/part-of: rca-demo
-  annotations:
-    helm.sh/hook: post-install,post-upgrade
-    helm.sh/hook-weight: "50"
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
   backoffLimit: 0
   ttlSecondsAfterFinished: 3600
@@ -66,6 +69,7 @@ spec:
         # Opt out of auto-instrumentation — the runner is a test harness, not
         # a traced workload, and its spans would pollute the correlator.
         instrumentation.opentelemetry.io/inject-python: "false"
+        rca-demo/run-id: {{ .Values.chaosRunner.runId | default "static" | quote }}
     spec:
       serviceAccountName: chaos-runner
       restartPolicy: Never

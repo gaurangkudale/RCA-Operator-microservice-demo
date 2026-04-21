@@ -110,7 +110,7 @@ chaosRunner:
   # injection to the demo services via /chaos/config, then polls
   # IncidentReport CRs to assert the operator produced the expected signals.
   # Disabled by default — enable on demand for regression testing.
-  enabled: false
+  enabled: true
   image:
     repository: ghcr.io/gaurangkudale/rca-operator-microservice-demo-chaos
     tag: main
@@ -118,3 +118,7 @@ chaosRunner:
   # Leave empty to run every scenario (--all). Set to a specific scenario
   # name (e.g. "payment_outage") to run just one.
   scenario: ""
+  # Optional identifier folded into a pod-template annotation. Bump it (e.g.
+  # to `$(date +%s)`) on `helm upgrade` to force a fresh Job generation when
+  # only re-running — a no-op otherwise.
+  runId: ""
