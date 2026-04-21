@@ -1,0 +1,126 @@
+# Deterministic chaos scenarios for RCA-Operator Phase 2 validation.
+#
+# Each scenario:
+#   1. Applies `chaos_overrides` to target services via POST /chaos/config.
+#   2. Drives `workload` against the demo frontend for `duration_seconds`.
+#   3. Polls the rca-demo namespace for IncidentReport CRs and asserts that
+#      the `expect` block is satisfied within `assert_timeout_seconds`.
+#   4. Resets overrides via POST /chaos/reset.
+#
+# Run:   python runner.py --scenario payment_outage
+# All:   python runner.py --all
+
+defaults:
+  namespace: rca-demo
+  frontend_url: http://frontend.rca-demo.svc.cluster.local:8080
+  assert_timeout_seconds: 180
+  poll_interval_seconds: 5
+  duration_seconds: 90
+  workload:
+    # Multi-step checkout flow that touches every downstream service.
+    - {method: GET,  path: /products, weight: 2}
+    - {method: POST, path: /cart/add, weight: 2, body: {userId: scenario-user, productId: sku-1001, quantity: 1}}
+    - {method: POST, path: /checkout, weight: 6, body: {userId: scenario-user, paymentMethod: card, email: qa@example.com}}
+  concurrency: 8
+  rps: 10
+
+scenarios:
+
+  payment_outage:
+    description: Force payment gateway to fail 100%. Expect incidents that
+      identify payment as the root cause, with cascade into checkout.
+    targets:
+      payment:
+        PAYMENT_FAILURE_RATE: 1.0
+        PAYMENT_SLOW_PROB: 0.0
+    expect:
+      incidents:
+        - incident_type: OTelSpanError
+          workload: payment
+          min_count: 1
+        - incident_type: PaymentDependencyFailure
+          workload: checkout
+          min_count: 1
+          optional: true   # depends on correlator window hitting sameTrace pairs
+
+  catalog_outage:
+    description: Force product-catalog errors. Expect catalog OTelSpanError
+      plus CatalogDependencyFailure incident against quote.
+    targets:
+      product-catalog:
+        CATALOG_ERROR_PROB: 1.0
+        CATALOG_LATENCY_PROB: 0.0
+    expect:
+      incidents:
+        - incident_type: OTelSpanError
+          workload: product-catalog
+          min_count: 1
+        - incident_type: CatalogDependencyFailure
+          workload: quote
+          min_count: 1
+          optional: true
+
+  quote_price_mismatch:
+    description: Force quote to emit 500 price-mismatch errors. Expect
+      QuotePriceMismatch incident attributed to quote workload.
+    targets:
+      quote:
+        QUOTE_MISMATCH_RATE: 1.0
+    expect:
+      incidents:
+        - incident_type: QuotePriceMismatch
+          workload: quote
+          min_count: 1
+
+  ad_service_latency_storm:
+    description: Force ad-service to add 400-900ms delay on every call.
+      Expect span latency spikes; AdServiceLatencyCascade is best-effort.
+    targets:
+      ad-service:
+        AD_DELAY_PROB: 1.0
+        AD_ERROR_PROB: 0.0
+    expect:
+      incidents:
+        - incident_type: OTelSpanLatencySpike
+          workload: ad-service
+          min_count: 1
+          optional: true
+        - incident_type: AdServiceLatencyCascade
+          workload: quote
+          min_count: 1
+          optional: true
+
+  shipping_carrier_outage:
+    description: Force shipping to 503 on every create. Expect ShippingOutage
+      correlating span errors with ERROR logs.
+    targets:
+      shipping:
+        SHIPPING_FAILURE_RATE: 1.0
+        SHIPPING_WARNING_RATE: 0.0
+    expect:
+      incidents:
+        - incident_type: OTelSpanError
+          workload: shipping
+          min_count: 1
+        - incident_type: ShippingOutage
+          workload: shipping
+          min_count: 1
+          optional: true
+
+  multi_service_cascade:
+    description: Combined fault injection — payment + catalog fail simultaneously.
+      Use this to stress the correlator's sameTrace dedup and rule priority ordering.
+    duration_seconds: 120
+    targets:
+      payment:
+        PAYMENT_FAILURE_RATE: 0.8
+      product-catalog:
+        CATALOG_ERROR_PROB: 0.5
+    expect:
+      incidents:
+        - incident_type: OTelSpanError
+          workload: payment
+          min_count: 1
+        - incident_type: OTelSpanError
+          workload: product-catalog
+          min_count: 1

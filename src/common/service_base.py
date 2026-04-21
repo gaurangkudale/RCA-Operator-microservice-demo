@@ -30,6 +30,22 @@ def env_float(name: str, default: float) -> float:
         return default
 
 
+# Runtime chaos overrides. Scenario runners POST to /chaos/config to flip
+# failure probabilities without restarting pods. Keys mirror env var names
+# (PAYMENT_FAILURE_RATE, CATALOG_ERROR_PROB, ...). Values override env defaults
+# for the lifetime of the pod or until /chaos/reset is called.
+CHAOS_OVERRIDES: Dict[str, float] = {}
+_chaos_lock = threading.Lock()
+
+
+def chaos_float(name: str, env_default_value: float) -> float:
+    """Return the runtime chaos override for `name` if set, else env default."""
+    with _chaos_lock:
+        if name in CHAOS_OVERRIDES:
+            return CHAOS_OVERRIDES[name]
+    return env_default_value
+
+
 def resolve_request_id(x_request_id: str) -> str:
     return x_request_id.strip() if x_request_id and x_request_id.strip() else f"req-{uuid.uuid4().hex[:12]}"
 
@@ -314,11 +330,11 @@ def create_app(service_name: str):
                 raise HTTPException(status_code=502, detail="Catalog unavailable")
 
         if is_service(service_name, "product-catalog"):
-            if random.random() < catalog_error_prob:
+            if random.random() < chaos_float("CATALOG_ERROR_PROB", catalog_error_prob):
                 log_event(logger, "error", service_name, "/products", request_id, "DB timeout while fetching products")
                 raise HTTPException(status_code=504, detail="Catalog DB timeout")
 
-            if random.random() < catalog_latency_prob:
+            if random.random() < chaos_float("CATALOG_LATENCY_PROB", catalog_latency_prob):
                 time.sleep(random.uniform(0.55, 1.1))
                 log_event(logger, "warning", service_name, "/products", request_id, "Slow DB response")
 
@@ -425,11 +441,11 @@ def create_app(service_name: str):
         if not is_service(service_name, "product-catalog"):
             raise HTTPException(status_code=404, detail="Endpoint is only exposed by product-catalog")
 
-        if random.random() < catalog_error_prob:
+        if random.random() < chaos_float("CATALOG_ERROR_PROB", catalog_error_prob):
             log_event(logger, "error", service_name, f"/products/{product_id}", request_id, "DB timeout while fetching product")
             raise HTTPException(status_code=504, detail="Catalog DB timeout")
 
-        if random.random() < catalog_latency_prob:
+        if random.random() < chaos_float("CATALOG_LATENCY_PROB", catalog_latency_prob):
             time.sleep(random.uniform(0.55, 1.0))
             log_event(logger, "warning", service_name, f"/products/{product_id}", request_id, "Slow DB response")
 
@@ -460,11 +476,11 @@ def create_app(service_name: str):
         if not is_service(service_name, "ad-service", "ad"):
             raise HTTPException(status_code=404, detail="Endpoint is only exposed by ad-service")
 
-        if random.random() < ad_error_prob:
+        if random.random() < chaos_float("AD_ERROR_PROB", ad_error_prob):
             log_event(logger, "error", service_name, "/discounts", request_id, "Invalid discount rule", user_id=userId)
             raise HTTPException(status_code=500, detail="Invalid discount rule")
 
-        if random.random() < ad_delay_prob:
+        if random.random() < chaos_float("AD_DELAY_PROB", ad_delay_prob):
             time.sleep(random.uniform(0.4, 0.9))
             log_event(logger, "warning", service_name, "/discounts", request_id, "Discount service delayed", user_id=userId)
 
@@ -523,7 +539,7 @@ def create_app(service_name: str):
 
         discount_amount = round(subtotal * discount_pct / 100.0, 2)
         total = round(subtotal - discount_amount, 2)
-        if random.random() < quote_mismatch_rate:
+        if random.random() < chaos_float("QUOTE_MISMATCH_RATE", quote_mismatch_rate):
             log_event(logger, "error", service_name, "/quote", request_id, "Price mismatch detected", dependency="ad-service", subtotal=subtotal, discount_percent=discount_pct)
             raise HTTPException(status_code=500, detail="Price mismatch")
 
@@ -545,11 +561,11 @@ def create_app(service_name: str):
             raise HTTPException(status_code=404, detail="Endpoint is only exposed by payment")
 
         amount = float(payload.get("amount", 0.0))
-        if random.random() < payment_slow_prob:
+        if random.random() < chaos_float("PAYMENT_SLOW_PROB", payment_slow_prob):
             time.sleep(random.uniform(0.45, 0.95))
             log_event(logger, "warning", service_name, "/payment/charge", request_id, "Slow payment gateway")
 
-        if random.random() < payment_failure_rate:
+        if random.random() < chaos_float("PAYMENT_FAILURE_RATE", payment_failure_rate):
             log_event(logger, "error", service_name, "/payment/charge", request_id, "Payment failed due to gateway timeout")
             raise HTTPException(status_code=504, detail="Gateway timeout")
 
@@ -579,11 +595,11 @@ def create_app(service_name: str):
         if not is_service(service_name, "shipping"):
             raise HTTPException(status_code=404, detail="Endpoint is only exposed by shipping")
 
-        if random.random() < shipping_warning_rate:
+        if random.random() < chaos_float("SHIPPING_WARNING_RATE", shipping_warning_rate):
             log_event(logger, "warning", service_name, "/shipping/create", request_id, "Carrier delay observed")
             time.sleep(random.uniform(0.35, 0.8))
 
-        if random.random() < shipping_failure_rate:
+        if random.random() < chaos_float("SHIPPING_FAILURE_RATE", shipping_failure_rate):
             log_event(logger, "error", service_name, "/shipping/create", request_id, "Carrier unavailable")
             raise HTTPException(status_code=503, detail="Shipping unavailable")
 
@@ -613,7 +629,7 @@ def create_app(service_name: str):
             raise HTTPException(status_code=404, detail="Endpoint is only exposed by email")
 
         recipient = payload.get("to", "buyer@example.com")
-        if random.random() < email_warning_rate:
+        if random.random() < chaos_float("EMAIL_WARNING_RATE", email_warning_rate):
             log_event(logger, "warning", service_name, "/email/send", request_id, "Email delivery delayed", recipient=recipient)
             time.sleep(random.uniform(0.1, 0.4))
 
@@ -706,5 +722,35 @@ def create_app(service_name: str):
             "fanout_calls": len(outcomes),
             "outcomes": outcomes,
         }
+
+    @app.post("/chaos/config")
+    def chaos_config(payload: Dict[str, Any] = Body(default={}), x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        if not isinstance(payload, dict) or "overrides" not in payload or not isinstance(payload["overrides"], dict):
+            raise HTTPException(status_code=400, detail="Body must be {\"overrides\": {KEY: float, ...}}")
+        applied: Dict[str, float] = {}
+        with _chaos_lock:
+            for key, raw in payload["overrides"].items():
+                try:
+                    value = max(0.0, min(1.0, float(raw)))
+                except (TypeError, ValueError):
+                    raise HTTPException(status_code=400, detail=f"Value for {key} must be a number in [0,1]")
+                CHAOS_OVERRIDES[key] = value
+                applied[key] = value
+        log_event(logger, "warning", service_name, "/chaos/config", request_id, "Chaos overrides applied", overrides=applied)
+        return {"service": service_name, "applied": applied, "active": dict(CHAOS_OVERRIDES)}
+
+    @app.post("/chaos/reset")
+    def chaos_reset(x_request_id: str = Header(default="")):
+        request_id = resolve_request_id(x_request_id)
+        with _chaos_lock:
+            CHAOS_OVERRIDES.clear()
+        log_event(logger, "info", service_name, "/chaos/reset", request_id, "Chaos overrides cleared")
+        return {"service": service_name, "active": {}}
+
+    @app.get("/chaos/status")
+    def chaos_status():
+        with _chaos_lock:
+            return {"service": service_name, "active": dict(CHAOS_OVERRIDES)}
 
     return app

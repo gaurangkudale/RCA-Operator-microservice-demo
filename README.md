@@ -210,3 +210,93 @@ kubectl port-forward svc/rca-demo-signoz-frontend 3301:3301 -n rca-demo
 ### 6. Observe Telemetry for RCA-Operator
 
 Because OpenTelemetry and python-json-logger are properly configured, all standard output logs from the pods will be emitted in structured JSON format with `TraceID`, `SpanID`, `Severity`, and `Exception` fields, matching the ingestion patterns required by the RCA-Operator's Correlation Engine.
+
+## Phase 2 Validation
+
+Phase 2 of the RCA-Operator adds an OTLP ingest path, a topology-graph
+correlator, and CRD-driven correlation rules (`RCACorrelationRule`,
+`IncidentReport`). This repo ships three things that exercise those features
+end-to-end:
+
+1. **Runtime chaos endpoints** on every service:
+   - `POST /chaos/config` — body `{"overrides": {"PAYMENT_FAILURE_RATE": 1.0}}` flips fault probabilities without restarting the pod.
+   - `POST /chaos/reset` — clears all overrides.
+   - `GET /chaos/status` — lists currently active overrides.
+
+2. **Sample `RCACorrelationRule` CRs** installed by the chart (see
+   [helm/rca-demo/templates/correlation-rules.yaml](helm/rca-demo/templates/correlation-rules.yaml)).
+   Toggle with `--set correlationRules.enabled=false`. Rules cover:
+   - `demo-payment-cascade-to-checkout` — `sameTrace` span errors on `payment`
+     + `checkout` → fires `PaymentDependencyFailure` (P2) against checkout.
+   - `demo-catalog-cascade-to-quote` — catalog errors rippling into quote.
+   - `demo-ad-latency-cascade-to-quote` — latency-spike correlation via
+     `OTelSpanLatencySpike`.
+   - `demo-shipping-5xx-with-error-log` — correlates `OTelSpanError`
+     (`http.status_code=503`) with `OTelLogMatch` (`severity=ERROR`) in the
+     same namespace.
+   - `demo-quote-price-mismatch` — attribute-only rule on a single workload.
+   - `demo-payment-oom-crashloop` — K8s-signal rule (`CrashLoopBackOff` +
+     `OOMKilled` `samePod`) to verify the K8s pipeline alongside OTel.
+
+3. **Chaos scenario runner** under [chaos/](chaos/) that applies deterministic
+   fault patterns, drives targeted workload, and asserts the operator emitted
+   the expected `IncidentReport` CRs.
+
+### Running a scenario from outside the cluster
+
+```bash
+# 1. Port-forward the frontend so the runner can reach it.
+kubectl -n rca-demo port-forward svc/frontend 8080:8080 &
+
+# 2. Install runner deps and execute.
+cd chaos
+pip install -r requirements.txt
+python runner.py --list
+python runner.py --scenario payment_outage
+python runner.py --all
+```
+
+The runner consults the **current kubeconfig** to read `IncidentReport` CRs
+from `rca-demo`. Exit code `0` means every non-optional expectation was met;
+`1` means a required incident did not appear within the timeout.
+
+### Running in-cluster as a Job
+
+Build and push the chaos image, then enable the Job:
+
+```bash
+cd chaos
+docker build -t ghcr.io/gaurangkudale/rca-operator-microservice-demo-chaos:main .
+kind load docker-image ghcr.io/gaurangkudale/rca-operator-microservice-demo-chaos:main
+
+helm upgrade --install rca-demo ./helm/rca-demo -n rca-demo \
+  --set chaosRunner.enabled=true \
+  --set chaosRunner.scenario=payment_outage
+kubectl -n rca-demo logs -f job/chaos-runner
+```
+
+Set `chaosRunner.scenario=""` to run every scenario sequentially (`--all`).
+
+### Available scenarios
+
+| Scenario                  | Failure injected                          | Primary expected incident             |
+| ------------------------- | ----------------------------------------- | ------------------------------------- |
+| `payment_outage`          | `PAYMENT_FAILURE_RATE=1.0` on payment     | `OTelSpanError` on payment; cascade into `PaymentDependencyFailure` |
+| `catalog_outage`          | `CATALOG_ERROR_PROB=1.0` on catalog       | `OTelSpanError` on product-catalog; `CatalogDependencyFailure` on quote |
+| `quote_price_mismatch`    | `QUOTE_MISMATCH_RATE=1.0` on quote        | `QuotePriceMismatch` on quote         |
+| `ad_service_latency_storm`| `AD_DELAY_PROB=1.0` on ad-service         | `OTelSpanLatencySpike`; optional `AdServiceLatencyCascade` |
+| `shipping_carrier_outage` | `SHIPPING_FAILURE_RATE=1.0` on shipping   | `OTelSpanError` on shipping; `ShippingOutage` |
+| `multi_service_cascade`   | Simultaneous payment + catalog faults     | Multiple `OTelSpanError` incidents    |
+
+### Inspecting results manually
+
+```bash
+# Rules loaded by the operator
+kubectl get rcacorrelationrule
+
+# Incidents produced during/after a scenario
+kubectl -n rca-demo get incidentreport -o wide
+
+# Drill into a specific incident
+kubectl -n rca-demo get incidentreport <name> -o yaml
+```

@@ -1,0 +1,169 @@
+{{- if .Values.correlationRules.enabled }}
+# Phase 2 sample RCACorrelationRule CRs targeting OTel signals emitted by the
+# demo. Each rule is priority-ordered so more specific cascades (higher number)
+# pre-empt catch-all fallbacks. Rules are cluster-scoped.
+---
+# 1. Payment failure that propagates up to checkout in the same trace.
+# Root cause: payment. Triggered on the checkout-side span error; the
+# sameTrace condition proves the error originated downstream in payment.
+apiVersion: rca.rca-operator.tech/v1alpha1
+kind: RCACorrelationRule
+metadata:
+  name: demo-payment-cascade-to-checkout
+  labels:
+    app.kubernetes.io/component: demo-correlation-rule
+    app.kubernetes.io/part-of: rca-demo
+spec:
+  priority: 900
+  trigger:
+    eventType: OTelSpanError
+  conditions:
+    - eventType: OTelSpanError
+      scope: sameTrace
+      attributes:
+        - {key: service.name, op: Equals, value: payment}
+    - eventType: OTelSpanError
+      scope: sameTrace
+      attributes:
+        - {key: service.name, op: Equals, value: checkout}
+  fires:
+    incidentType: PaymentDependencyFailure
+    severity: P2
+    scope: Workload
+    resource: deployment
+    summary: 'Checkout {{`{{.Namespace}}`}}/{{`{{.PodName}}`}} failing due to payment dependency errors in same trace'
+---
+# 2. Quote degradation caused by upstream product-catalog errors.
+apiVersion: rca.rca-operator.tech/v1alpha1
+kind: RCACorrelationRule
+metadata:
+  name: demo-catalog-cascade-to-quote
+  labels:
+    app.kubernetes.io/component: demo-correlation-rule
+    app.kubernetes.io/part-of: rca-demo
+spec:
+  priority: 880
+  trigger:
+    eventType: OTelSpanError
+  conditions:
+    - eventType: OTelSpanError
+      scope: sameTrace
+      attributes:
+        - {key: service.name, op: Equals, value: product-catalog}
+    - eventType: OTelSpanError
+      scope: sameTrace
+      attributes:
+        - {key: service.name, op: Equals, value: quote}
+  fires:
+    incidentType: CatalogDependencyFailure
+    severity: P3
+    scope: Workload
+    resource: deployment
+    summary: 'Quote service failing due to product-catalog errors in same trace'
+---
+# 3. Ad-service latency rippling into quote latency (soft SLO breach).
+apiVersion: rca.rca-operator.tech/v1alpha1
+kind: RCACorrelationRule
+metadata:
+  name: demo-ad-latency-cascade-to-quote
+  labels:
+    app.kubernetes.io/component: demo-correlation-rule
+    app.kubernetes.io/part-of: rca-demo
+spec:
+  priority: 700
+  trigger:
+    eventType: OTelSpanLatencySpike
+  conditions:
+    - eventType: OTelSpanLatencySpike
+      scope: sameTrace
+      attributes:
+        - {key: service.name, op: Equals, value: ad-service}
+    - eventType: OTelSpanLatencySpike
+      scope: sameTrace
+      attributes:
+        - {key: service.name, op: Equals, value: quote}
+  fires:
+    incidentType: AdServiceLatencyCascade
+    severity: P3
+    scope: Workload
+    resource: deployment
+    summary: 'Quote latency SLO breach attributed to ad-service slowness (sameTrace)'
+---
+# 4. Shipping 5xx burst correlated with an ERROR log from the same workload.
+apiVersion: rca.rca-operator.tech/v1alpha1
+kind: RCACorrelationRule
+metadata:
+  name: demo-shipping-5xx-with-error-log
+  labels:
+    app.kubernetes.io/component: demo-correlation-rule
+    app.kubernetes.io/part-of: rca-demo
+spec:
+  priority: 800
+  trigger:
+    eventType: OTelSpanError
+  conditions:
+    - eventType: OTelSpanError
+      scope: sameNamespace
+      attributes:
+        - {key: service.name, op: Equals, value: shipping}
+        - {key: http.status_code, op: Equals, value: "503"}
+    - eventType: OTelLogMatch
+      scope: sameNamespace
+      attributes:
+        - {key: service.name, op: Equals, value: shipping}
+        - {key: severity, op: Equals, value: ERROR}
+  fires:
+    incidentType: ShippingOutage
+    severity: P2
+    scope: Workload
+    resource: deployment
+    summary: 'Shipping carrier outage: 503 spans + ERROR logs observed'
+---
+# 5. Quote service price-mismatch errors (500) — targeted single-service rule
+# verifying attribute filtering on http.status_code alone.
+apiVersion: rca.rca-operator.tech/v1alpha1
+kind: RCACorrelationRule
+metadata:
+  name: demo-quote-price-mismatch
+  labels:
+    app.kubernetes.io/component: demo-correlation-rule
+    app.kubernetes.io/part-of: rca-demo
+spec:
+  priority: 600
+  trigger:
+    eventType: OTelSpanError
+  conditions:
+    - eventType: OTelSpanError
+      scope: samePod
+      attributes:
+        - {key: service.name, op: Equals, value: quote}
+        - {key: http.status_code, op: Equals, value: "500"}
+  fires:
+    incidentType: QuotePriceMismatch
+    severity: P3
+    scope: Workload
+    resource: deployment
+    summary: 'Quote service emitting price-mismatch 500s'
+---
+# 6. Payment OOMKilled + CrashLoop cascade (K8s signal rule) — verifies K8s
+# event pipeline still works alongside new OTel pipeline.
+apiVersion: rca.rca-operator.tech/v1alpha1
+kind: RCACorrelationRule
+metadata:
+  name: demo-payment-oom-crashloop
+  labels:
+    app.kubernetes.io/component: demo-correlation-rule
+    app.kubernetes.io/part-of: rca-demo
+spec:
+  priority: 950
+  trigger:
+    eventType: CrashLoopBackOff
+  conditions:
+    - eventType: OOMKilled
+      scope: samePod
+  fires:
+    incidentType: PaymentOOMCrashLoop
+    severity: P1
+    scope: Pod
+    summary: 'Pod {{`{{.Namespace}}`}}/{{`{{.PodName}}`}} crashlooping after OOMKill'
+{{- end }}

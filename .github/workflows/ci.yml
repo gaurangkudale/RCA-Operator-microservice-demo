@@ -55,6 +55,12 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.REPO }}-load-tester
 
+      - name: Extract metadata (tags, labels) for Chaos Runner
+        id: meta-chaos
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.REPO }}-chaos
+
       - name: Build and push App Image
         uses: docker/build-push-action@v5
         with:
@@ -74,6 +80,17 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta-load-tester.outputs.tags }}
           labels: ${{ steps.meta-load-tester.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push Chaos Runner Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./chaos
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-chaos.outputs.tags }}
+          labels: ${{ steps.meta-chaos.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

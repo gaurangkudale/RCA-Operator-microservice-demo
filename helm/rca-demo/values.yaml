@@ -96,3 +96,25 @@ prometheus:
 
 signoz:
   enabled: false # Disabled by default as it's heavy, enable if needed
+
+# Phase 2 RCA-Operator test artifacts.
+correlationRules:
+  # Install the six sample RCACorrelationRule CRs that target OTel signals
+  # emitted by the demo services (span errors, latency spikes, log matches).
+  # Disable if you want to bring your own rules or test the operator's
+  # zero-rule behaviour.
+  enabled: true
+
+chaosRunner:
+  # The chaos runner is a one-shot Job that applies deterministic fault
+  # injection to the demo services via /chaos/config, then polls
+  # IncidentReport CRs to assert the operator produced the expected signals.
+  # Disabled by default — enable on demand for regression testing.
+  enabled: false
+  image:
+    repository: ghcr.io/gaurangkudale/rca-operator-microservice-demo-chaos
+    tag: main
+    pullPolicy: IfNotPresent
+  # Leave empty to run every scenario (--all). Set to a specific scenario
+  # name (e.g. "payment_outage") to run just one.
+  scenario: ""
