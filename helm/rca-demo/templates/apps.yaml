@@ -27,6 +27,11 @@ spec:
               value: {{ .name | quote }}
             - name: DATABASE_URL
               value: "postgres://postgres:password@{{ $.Release.Name }}-postgresql:5432/rca_demo"
+            # RCA scenarios and rules in this demo focus on spans/logs. Disable
+            # metrics export to avoid periodic OTLP HTTP 404 noise from
+            # auto-instrumentation when no metrics ingest endpoint is present.
+            - name: OTEL_METRICS_EXPORTER
+              value: "none"
             {{- range .env }}
             - name: {{ .name }}
               value: {{ .value | quote }}
