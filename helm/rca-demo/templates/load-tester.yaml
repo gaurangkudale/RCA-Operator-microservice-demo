@@ -1,3 +1,4 @@
+{{- if .Values.loadTesterImage.enabled }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,3 +24,4 @@ spec:
               value: "http://frontend:8080"
             - name: TARGET_URL
               value: "http://frontend:8080"
+{{- end }}
